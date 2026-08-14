@@ -115,14 +115,14 @@ def draw_warehouse_map(warehouse: Warehouse, route: List[Pick] = None) -> go.Fig
             x=x_c - 0.95, y=y_section1_end / 2,
             text=f"S{aisle.left_side:02d}",
             showarrow=False,
-            font=dict(size=10, color="white", bold=True),
+            font=dict(size=10, color="white"),
             textangle=-90
         )
         fig.add_annotation(
             x=x_c - 0.95, y=(y_section2_start + y_max) / 2,
             text=f"S{aisle.left_side:02d}",
             showarrow=False,
-            font=dict(size=10, color="white", bold=True),
+            font=dict(size=10, color="white"),
             textangle=-90
         )
         
@@ -149,14 +149,14 @@ def draw_warehouse_map(warehouse: Warehouse, route: List[Pick] = None) -> go.Fig
                 x=x_c + 0.95, y=y_section1_end / 2,
                 text=f"S{aisle.right_side:02d}",
                 showarrow=False,
-                font=dict(size=10, color="white", bold=True),
+                font=dict(size=10, color="white"),
                 textangle=-90
             )
             fig.add_annotation(
                 x=x_c + 0.95, y=(y_section2_start + y_max) / 2,
                 text=f"S{aisle.right_side:02d}",
                 showarrow=False,
-                font=dict(size=10, color="white", bold=True),
+                font=dict(size=10, color="white"),
                 textangle=-90
             )
             
@@ -202,7 +202,7 @@ def draw_warehouse_map(warehouse: Warehouse, route: List[Pick] = None) -> go.Fig
         x=11.25, y=y_section1_end + (cross_width / 2.0),
         text="Mittel-/Quergang (Breite: 1,43 m)",
         showarrow=False,
-        font=dict(size=11, color="rgb(71, 85, 105)", italic=True, bold=True)
+        font=dict(size=11, color="rgb(71, 85, 105)")
     )
 
     # 4. Draw Row boundaries indicators (001, 042, 043, 084)
@@ -228,12 +228,12 @@ def draw_warehouse_map(warehouse: Warehouse, route: List[Pick] = None) -> go.Fig
     fig.add_annotation(
         x=11.25, y=-2.0,
         text="Eingang / Endbereich bei Reihe 001",
-        showarrow=False, font=dict(size=10, color="rgb(100, 116, 139)", italic=True)
+        showarrow=False, font=dict(size=10, color="rgb(100, 116, 139)")
     )
     fig.add_annotation(
         x=11.25, y=y_max + 1.0,
         text="Ausgang / Endbereich bei Reihe 084",
-        showarrow=False, font=dict(size=10, color="rgb(100, 116, 139)", italic=True)
+        showarrow=False, font=dict(size=10, color="rgb(100, 116, 139)")
     )
     
     # 4. Plot path and pick coordinates if a route is provided
@@ -304,7 +304,7 @@ def draw_warehouse_map(warehouse: Warehouse, route: List[Pick] = None) -> go.Fig
             ),
             text=[str(i+1) for i in range(len(route))],
             textposition="middle center",
-            textfont=dict(color="white", size=9, bold=True),
+            textfont=dict(color="white", size=9),
             hovertext=pick_labels,
             hoverinfo="text",
             name="Pick-Positionen"
