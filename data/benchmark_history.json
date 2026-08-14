@@ -1,0 +1,80 @@
+{
+  "BATCH-HISTORICAL-0001::v0.1": {
+    "batch_id": "BATCH-HISTORICAL-0001",
+    "timestamp": "2026-08-14T09:54:24.586903",
+    "optimizer_version": "v0.1",
+    "pick_count": 33,
+    "source": "historical",
+    "baseline_distance_m": 935.59,
+    "grouped_aisle_distance_m": 612.04,
+    "greedy_distance_m": 563.86,
+    "end_aware_distance_m": 622.44,
+    "physical_distance_optimum_m": 695.87,
+    "physical_operational_optimum_m": 695.87,
+    "baseline_backtracking_m": 169.26,
+    "grouped_backtracking_m": 0.0,
+    "greedy_backtracking_m": 157.69,
+    "end_aware_backtracking_m": 0.0,
+    "physical_distance_backtracking_m": 0.0,
+    "physical_operational_backtracking_m": 0.0,
+    "best_distance_method": "Greedy Nearest",
+    "best_operational_method": "Grouped Aisle",
+    "batch_profile": {
+      "physical_aisles_visited": 9,
+      "sides_visited": 14,
+      "min_row": 1,
+      "max_row": 84,
+      "aisle_density": {
+        "0": 0,
+        "1": 1,
+        "2": 3,
+        "3": 1,
+        "4": 8,
+        "5": 5,
+        "6": 5,
+        "7": 5,
+        "8": 3,
+        "9": 2
+      }
+    }
+  },
+  "BATCH-TEST-HIST::v0.1": {
+    "batch_id": "BATCH-TEST-HIST",
+    "timestamp": "2026-08-15T01:11:24.881452",
+    "optimizer_version": "v0.1",
+    "pick_count": 4,
+    "source": "historical",
+    "baseline_distance_m": 189.26,
+    "grouped_aisle_distance_m": 180.63,
+    "greedy_distance_m": 180.63,
+    "end_aware_distance_m": 189.26,
+    "physical_distance_optimum_m": 189.26,
+    "physical_operational_optimum_m": 189.26,
+    "baseline_backtracking_m": 0.0,
+    "grouped_backtracking_m": 0.0,
+    "greedy_backtracking_m": 0.0,
+    "end_aware_backtracking_m": 0.0,
+    "physical_distance_backtracking_m": 0.0,
+    "physical_operational_backtracking_m": 0.0,
+    "best_distance_method": "Grouped Aisle",
+    "best_operational_method": "Grouped Aisle",
+    "batch_profile": {
+      "physical_aisles_visited": 3,
+      "sides_visited": 4,
+      "min_row": 4,
+      "max_row": 80,
+      "aisle_density": {
+        "0": 0,
+        "1": 1,
+        "2": 2,
+        "3": 0,
+        "4": 0,
+        "5": 0,
+        "6": 0,
+        "7": 0,
+        "8": 0,
+        "9": 1
+      }
+    }
+  }
+}

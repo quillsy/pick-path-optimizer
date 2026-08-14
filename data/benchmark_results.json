@@ -1,0 +1,108 @@
+{
+  "BATCH-HISTORICAL-0001": {
+    "batch_id": "BATCH-HISTORICAL-0001",
+    "runs": [
+      {
+        "method_name": "Baseline",
+        "total_distance_m": 935.59,
+        "estimated_backtracking_distance_m": 169.26,
+        "via_middle_count": 6,
+        "repeated_aisle_visit_count": 0,
+        "end_distance_to_20_001_m": 24.7
+      },
+      {
+        "method_name": "Grouped Aisle",
+        "total_distance_m": 612.04,
+        "estimated_backtracking_distance_m": 0.0,
+        "via_middle_count": 3,
+        "repeated_aisle_visit_count": 0,
+        "end_distance_to_20_001_m": 35.1
+      },
+      {
+        "method_name": "Greedy Nearest",
+        "total_distance_m": 563.86,
+        "estimated_backtracking_distance_m": 157.69,
+        "via_middle_count": 10,
+        "repeated_aisle_visit_count": 8,
+        "end_distance_to_20_001_m": 105.03
+      },
+      {
+        "method_name": "End Aware",
+        "total_distance_m": 622.44,
+        "estimated_backtracking_distance_m": 0.0,
+        "via_middle_count": 3,
+        "repeated_aisle_visit_count": 0,
+        "end_distance_to_20_001_m": 24.7
+      },
+      {
+        "method_name": "Physical Aisle - Distance Optimum",
+        "total_distance_m": 695.87,
+        "estimated_backtracking_distance_m": 0.0,
+        "via_middle_count": 4,
+        "repeated_aisle_visit_count": 0,
+        "end_distance_to_20_001_m": 24.7
+      },
+      {
+        "method_name": "Physical Aisle - Operational Optimum",
+        "total_distance_m": 695.87,
+        "estimated_backtracking_distance_m": 0.0,
+        "via_middle_count": 4,
+        "repeated_aisle_visit_count": 0,
+        "end_distance_to_20_001_m": 24.7
+      }
+    ]
+  },
+  "BATCH-TEST-HIST": {
+    "batch_id": "BATCH-TEST-HIST",
+    "runs": [
+      {
+        "method_name": "Baseline",
+        "total_distance_m": 189.26,
+        "estimated_backtracking_distance_m": 0.0,
+        "via_middle_count": 2,
+        "repeated_aisle_visit_count": 0,
+        "end_distance_to_20_001_m": 104.13
+      },
+      {
+        "method_name": "Grouped Aisle",
+        "total_distance_m": 180.63,
+        "estimated_backtracking_distance_m": 0.0,
+        "via_middle_count": 1,
+        "repeated_aisle_visit_count": 0,
+        "end_distance_to_20_001_m": 22.7
+      },
+      {
+        "method_name": "Greedy Nearest",
+        "total_distance_m": 180.63,
+        "estimated_backtracking_distance_m": 0.0,
+        "via_middle_count": 1,
+        "repeated_aisle_visit_count": 0,
+        "end_distance_to_20_001_m": 22.7
+      },
+      {
+        "method_name": "End Aware",
+        "total_distance_m": 189.26,
+        "estimated_backtracking_distance_m": 0.0,
+        "via_middle_count": 2,
+        "repeated_aisle_visit_count": 0,
+        "end_distance_to_20_001_m": 104.13
+      },
+      {
+        "method_name": "Physical Aisle - Distance Optimum",
+        "total_distance_m": 189.26,
+        "estimated_backtracking_distance_m": 0.0,
+        "via_middle_count": 2,
+        "repeated_aisle_visit_count": 0,
+        "end_distance_to_20_001_m": 104.13
+      },
+      {
+        "method_name": "Physical Aisle - Operational Optimum",
+        "total_distance_m": 189.26,
+        "estimated_backtracking_distance_m": 0.0,
+        "via_middle_count": 2,
+        "repeated_aisle_visit_count": 0,
+        "end_distance_to_20_001_m": 104.13
+      }
+    ]
+  }
+}

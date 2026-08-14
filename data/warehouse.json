@@ -1,0 +1,107 @@
+{
+  "warehouse": {
+    "shelf_length_m": 1.30,
+    "shelf_height_m": 2.50,
+    "shelf_depth_m": 0.60,
+    "main_aisle_width_m": 1.30,
+    "cross_aisle_width_m": 1.43
+  },
+  "rows": {
+    "start": 1,
+    "first_section_end": 42,
+    "second_section_start": 43,
+    "end": 84
+  },
+  "physical_aisles": [
+    {
+      "id": 1,
+      "left_side": 4,
+      "right_side": 5,
+      "row_start": 1,
+      "row_end": 84,
+      "x_position_m": 1.25,
+      "name": "Aisle 1"
+    },
+    {
+      "id": 2,
+      "left_side": 6,
+      "right_side": 7,
+      "row_start": 1,
+      "row_end": 84,
+      "x_position_m": 3.75,
+      "name": "Aisle 2"
+    },
+    {
+      "id": 3,
+      "left_side": 8,
+      "right_side": 9,
+      "row_start": 1,
+      "row_end": 84,
+      "x_position_m": 6.25,
+      "name": "Aisle 3"
+    },
+    {
+      "id": 4,
+      "left_side": 10,
+      "right_side": 11,
+      "row_start": 1,
+      "row_end": 84,
+      "x_position_m": 8.75,
+      "name": "Aisle 4"
+    },
+    {
+      "id": 5,
+      "left_side": 12,
+      "right_side": 13,
+      "row_start": 1,
+      "row_end": 84,
+      "x_position_m": 11.25,
+      "name": "Aisle 5"
+    },
+    {
+      "id": 6,
+      "left_side": 14,
+      "right_side": 15,
+      "row_start": 1,
+      "row_end": 84,
+      "x_position_m": 13.75,
+      "name": "Aisle 6"
+    },
+    {
+      "id": 7,
+      "left_side": 16,
+      "right_side": 17,
+      "row_start": 1,
+      "row_end": 84,
+      "x_position_m": 16.25,
+      "name": "Aisle 7"
+    },
+    {
+      "id": 8,
+      "left_side": 18,
+      "right_side": 19,
+      "row_start": 1,
+      "row_end": 84,
+      "x_position_m": 18.75,
+      "name": "Aisle 8"
+    },
+    {
+      "id": 9,
+      "left_side": 20,
+      "right_side": null,
+      "row_start": 1,
+      "row_end": 84,
+      "x_position_m": 21.25,
+      "name": "Aisle 9"
+    }
+  ],
+  "special_elements": [
+    {
+      "id": 0,
+      "name": "Rolling Cart (Wagen)",
+      "sides": [1, 2, 3],
+      "x_position_m": 1.25,
+      "y_position_m": -1.0
+    }
+  ]
+}
