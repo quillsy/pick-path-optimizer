@@ -1,184 +1,331 @@
-import unittest
-import sys
-import os
+import copy
 import json
+import os
+import statistics
+import sys
+import tempfile
+import unittest
 
-# Append project root
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from modules.warehouse import Warehouse
-from modules.picks import Pick
 from modules.optimizer_benchmark import (
+    HISTORY_OBJECTIVE_FIELDS,
+    HISTORY_SUMMARY_FIELDS,
+    OPTIMIZER_VERSION,
     benchmark_batch,
+    get_comparable_history_runs,
+    get_history_objective_summary,
     load_benchmark_history,
     save_benchmark_run,
-    OPTIMIZER_VERSION
+    summarize_benchmark_results,
+    summarize_objective_distances,
 )
+from modules.picks import Pick
+from modules.warehouse import Warehouse
+
 
 class TestBenchmarkHistory(unittest.TestCase):
     def setUp(self):
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        config_path = os.path.join(base_dir, "data", "warehouse.json")
+        self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_path = os.path.join(self.base_dir, "data", "warehouse.json")
         self.warehouse = Warehouse(config_path)
-        
-        self.temp_history_path = os.path.join(base_dir, "data", "test_temp_history.json")
-        if os.path.exists(self.temp_history_path):
-            os.remove(self.temp_history_path)
-            
-        # Sample test codes
-        self.test_codes = ["05.056.50", "06.008.30", "07.004.30", "20.080.10"]
-        self.picks = [Pick(code, self.warehouse) for code in self.test_codes]
+
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_history_path = os.path.join(self.temp_dir.name, "benchmark_history.json")
+        self.temp_results_path = os.path.join(self.temp_dir.name, "benchmark_results.json")
+
+        test_codes = ["05.056.50", "06.008.30", "07.004.30", "20.080.10"]
+        self.picks = [Pick(code, self.warehouse) for code in test_codes]
 
     def tearDown(self):
-        if os.path.exists(self.temp_history_path):
-            os.remove(self.temp_history_path)
+        self.temp_dir.cleanup()
 
-    def test_benchmark_runs_and_saves_and_loads(self):
-        # 1. Benchmark einer Batch runs correctly.
-        # 2. Ergebnis wird gespeichert.
-        # 3. Ergebnis kann geladen werden.
-        # 4. Batch-Daten bleiben unverändert.
-        # 9. Benchmark kann wiederholt werden.
-        # 10. Keine doppelten Benchmark-Einträge bei identischer Batch + identischer Algorithmusversion.
-        
-        # Capture original codes
-        orig_codes = [p.raw_code for p in self.picks]
-        
-        # Run benchmark
-        # (This will normally save to data/benchmark_history.json, but let's test save_benchmark_run directly with temp path)
-        results = benchmark_batch(self.picks, self.warehouse, "BATCH-TEST-HIST", "historical")
-        
-        # Verify original picks did not change
-        self.assertEqual([p.raw_code for p in self.picks], orig_codes)
-        
-        # Get one of the records
-        record = {
-            "batch_id": "BATCH-TEST-HIST",
+    def _modern_run(self, batch_id, distances, source="historical"):
+        run = {
+            "batch_id": batch_id,
+            "timestamp": "2026-08-30T12:00:00",
             "optimizer_version": OPTIMIZER_VERSION,
-            "source": "historical",
-            "pick_count": len(self.picks),
-            "baseline_distance_m": 120.0,
-            "grouped_aisle_distance_m": 100.0,
-            "greedy_distance_m": 90.0,
-            "end_aware_distance_m": 95.0,
-            "physical_distance_optimum_m": 110.0,
-            "physical_operational_optimum_m": 110.0,
+            "source": source,
+            "pick_count": 4,
             "baseline_backtracking_m": 10.0,
-            "grouped_backtracking_m": 0.0,
-            "greedy_backtracking_m": 5.0,
-            "end_aware_backtracking_m": 0.0,
-            "physical_distance_backtracking_m": 0.0,
-            "physical_operational_backtracking_m": 0.0,
-            "best_distance_method": "Greedy Nearest",
-            "best_operational_method": "Grouped Aisle",
-            "batch_profile": {}
+            "grouped_backtracking_m": 8.0,
+            "greedy_backtracking_m": 6.0,
+            "end_aware_backtracking_m": 5.0,
+            "physical_distance_backtracking_m": 4.0,
+            "physical_operational_backtracking_m": 3.0,
         }
-        
-        # Save to temp history
-        save_benchmark_run(self.temp_history_path, record)
-        
-        # Load and verify
-        history = load_benchmark_history(self.temp_history_path)
-        self.assertIn(f"BATCH-TEST-HIST::{OPTIMIZER_VERSION}", history)
-        loaded = history[f"BATCH-TEST-HIST::{OPTIMIZER_VERSION}"]
-        self.assertEqual(loaded["pick_count"], 4)
-        self.assertEqual(loaded["best_distance_method"], "Greedy Nearest")
-        
-        # Repeat benchmark saving (should overwrite, no duplicates)
-        save_benchmark_run(self.temp_history_path, record)
-        history_after = load_benchmark_history(self.temp_history_path)
-        self.assertEqual(len(history_after), 1)
+        for method, field in HISTORY_OBJECTIVE_FIELDS.items():
+            run[field] = distances[method]
+        run.update(summarize_objective_distances(distances))
+        return run
 
-    def test_simulation_and_historical_separated(self):
-        # 5. Simulation und Historical werden getrennt (via 'source' attribute)
-        rec_hist = {
-            "batch_id": "BATCH-HIST-1",
-            "optimizer_version": OPTIMIZER_VERSION,
+    def _temp_snapshot(self):
+        snapshot = {}
+        for root, _, files in os.walk(self.temp_dir.name):
+            for filename in files:
+                path = os.path.join(root, filename)
+                relative_path = os.path.relpath(path, self.temp_dir.name)
+                with open(path, "rb") as file_handle:
+                    snapshot[relative_path] = file_handle.read()
+        return snapshot
+
+    def test_optimizer_version_is_v02(self):
+        self.assertEqual(OPTIMIZER_VERSION, "v0.2")
+
+    def test_benchmark_persists_calculated_objectives_and_winner_semantics(self):
+        original_codes = [pick.raw_code for pick in self.picks]
+
+        results = benchmark_batch(
+            self.picks,
+            self.warehouse,
+            "BATCH-TEST-HIST",
+            "historical",
+            history_path=self.temp_history_path,
+            results_path=self.temp_results_path,
+        )
+
+        self.assertEqual([pick.raw_code for pick in self.picks], original_codes)
+        expected_summary = summarize_benchmark_results(results)
+        history = load_benchmark_history(self.temp_history_path)
+        history_key = f"BATCH-TEST-HIST::{OPTIMIZER_VERSION}"
+        self.assertEqual(list(history), [history_key])
+        stored_run = history[history_key]
+
+        for method, field in HISTORY_OBJECTIVE_FIELDS.items():
+            result = next(item for item in results if item["method_name"] == method)
+            self.assertEqual(stored_run[field], result["distance_with_exit_m"])
+        for field in HISTORY_SUMMARY_FIELDS:
+            self.assertEqual(stored_run[field], expected_summary[field])
+        self.assertEqual(
+            get_history_objective_summary(stored_run)["best_overall_method"],
+            expected_summary["best_overall_method"],
+        )
+
+        with open(self.temp_results_path, "r", encoding="utf-8") as file_handle:
+            stored_results = json.load(file_handle)
+        self.assertEqual(list(stored_results), [history_key])
+        result_record = stored_results[history_key]
+        for field in HISTORY_SUMMARY_FIELDS:
+            self.assertEqual(result_record[field], expected_summary[field])
+        persisted_runs = {item["method_name"]: item for item in result_record["runs"]}
+        for result in results:
+            self.assertEqual(
+                persisted_runs[result["method_name"]]["distance_with_exit_m"],
+                result["distance_with_exit_m"],
+            )
+
+        benchmark_batch(
+            self.picks,
+            self.warehouse,
+            "BATCH-TEST-HIST",
+            "historical",
+            history_path=self.temp_history_path,
+            results_path=self.temp_results_path,
+        )
+        self.assertEqual(len(load_benchmark_history(self.temp_history_path)), 1)
+
+    def test_saving_v02_preserves_existing_v01_entry(self):
+        v01_record = {
+            "batch_id": "BATCH-VERSIONED",
+            "optimizer_version": "v0.1",
             "source": "historical",
-            "baseline_distance_m": 100.0,
-            "grouped_aisle_distance_m": 80.0
+            "pick_count": 4,
+            "sentinel": {"must": "remain unchanged"},
         }
-        rec_sim = {
-            "batch_id": "BATCH-SIM-1",
-            "optimizer_version": OPTIMIZER_VERSION,
-            "source": "simulation",
-            "baseline_distance_m": 200.0,
-            "grouped_aisle_distance_m": 150.0
-        }
-        
-        save_benchmark_run(self.temp_history_path, rec_hist)
-        save_benchmark_run(self.temp_history_path, rec_sim)
-        
-        history = load_benchmark_history(self.temp_history_path)
-        runs = list(history.values())
-        
-        hist_runs = [r for r in runs if r["source"] == "historical"]
-        sim_runs = [r for r in runs if r["source"] == "simulation"]
-        
-        self.assertEqual(len(hist_runs), 1)
-        self.assertEqual(len(sim_runs), 1)
-        self.assertEqual(hist_runs[0]["batch_id"], "BATCH-HIST-1")
-        self.assertEqual(sim_runs[0]["batch_id"], "BATCH-SIM-1")
+        save_benchmark_run(self.temp_history_path, v01_record)
+        original_v01 = copy.deepcopy(v01_record)
 
-    def test_aggregation_calculations(self):
-        # 6. Durchschnittswerte (mean of savings) are correct.
-        # 7. Median is correct.
-        # 8. Best Method wird korrekt gezählt.
-        runs = [
-            {
-                "batch_id": "B1",
-                "optimizer_version": OPTIMIZER_VERSION,
-                "source": "historical",
-                "baseline_distance_m": 100.0,
-                "grouped_aisle_distance_m": 80.0, # saving 20.0 (20%)
-                "greedy_distance_m": 70.0, # saving 30.0 (30%)
-                "best_distance_method": "Greedy Nearest"
-            },
-            {
-                "batch_id": "B2",
-                "optimizer_version": OPTIMIZER_VERSION,
-                "source": "historical",
-                "baseline_distance_m": 200.0,
-                "grouped_aisle_distance_m": 150.0, # saving 50.0 (25%)
-                "greedy_distance_m": 160.0, # saving 40.0 (20%)
-                "best_distance_method": "Grouped Aisle"
-            },
-            {
-                "batch_id": "B3",
-                "optimizer_version": OPTIMIZER_VERSION,
-                "source": "historical",
-                "baseline_distance_m": 300.0,
-                "grouped_aisle_distance_m": 210.0, # saving 90.0 (30%)
-                "greedy_distance_m": 220.0, # saving 80.0 (26.7%)
-                "best_distance_method": "Grouped Aisle"
-            }
+        benchmark_batch(
+            self.picks,
+            self.warehouse,
+            "BATCH-VERSIONED",
+            history_path=self.temp_history_path,
+            results_path=self.temp_results_path,
+        )
+
+        history = load_benchmark_history(self.temp_history_path)
+        self.assertEqual(history["BATCH-VERSIONED::v0.1"], original_v01)
+        self.assertIn("BATCH-VERSIONED::v0.2", history)
+        self.assertEqual(len(history), 2)
+
+    def test_history_path_without_results_path_is_rejected_before_writing(self):
+        before = self._temp_snapshot()
+
+        with self.assertRaisesRegex(ValueError, "history_path and results_path"):
+            benchmark_batch(
+                self.picks,
+                self.warehouse,
+                "BATCH-PARTIAL-HISTORY",
+                history_path=self.temp_history_path,
+            )
+
+        self.assertEqual(self._temp_snapshot(), before)
+
+    def test_results_path_without_history_path_is_rejected_before_writing(self):
+        before = self._temp_snapshot()
+
+        with self.assertRaisesRegex(ValueError, "history_path and results_path"):
+            benchmark_batch(
+                self.picks,
+                self.warehouse,
+                "BATCH-PARTIAL-RESULTS",
+                results_path=self.temp_results_path,
+            )
+
+        self.assertEqual(self._temp_snapshot(), before)
+
+    def test_current_v01_history_entries_are_excluded_as_legacy(self):
+        production_history_path = os.path.join(
+            self.base_dir, "data", "benchmark_history.json"
+        )
+        history = load_benchmark_history(production_history_path)
+        v01_runs = [
+            run for run in history.values()
+            if run.get("optimizer_version") == "v0.1"
         ]
-        
-        # Let's verify our manual average & median calculation
-        # Savings in meters (comparing best of grouped/greedy to baseline):
-        # B1: best is greedy (70m), saving = 30m (30%)
-        # B2: best is grouped (150m), saving = 50m (25%)
-        # B3: best is grouped (210m), saving = 90m (30%)
-        
-        savings_m = [30.0, 50.0, 90.0]
-        savings_pct = [30.0, 25.0, 30.0]
-        
-        avg_saving_m = sum(savings_m) / len(savings_m)
-        self.assertAlmostEqual(avg_saving_m, 56.666666666)
-        
-        # Median of savings_m: sorted: [30.0, 50.0, 90.0] -> median is 50.0
-        import statistics
-        median_saving_m = statistics.median(savings_m)
-        self.assertEqual(median_saving_m, 50.0)
-        
-        # Best method counts: Greedy = 1, Grouped = 2
-        best_counts = {}
-        for r in runs:
-            method = r["best_distance_method"]
-            best_counts[method] = best_counts.get(method, 0) + 1
-            
-        self.assertEqual(best_counts["Greedy Nearest"], 1)
-        self.assertEqual(best_counts["Grouped Aisle"], 2)
+
+        self.assertTrue(v01_runs)
+        self.assertEqual(get_comparable_history_runs(v01_runs), [])
+        for run in v01_runs:
+            self.assertEqual(get_history_objective_summary(run), {})
+
+    def test_partial_objective_fields_are_legacy(self):
+        distances = {
+            "Baseline": 100.0,
+            "Grouped Aisle": 90.0,
+            "Greedy Nearest": 95.0,
+            "End Aware": 96.0,
+            "Physical Aisle - Distance Optimum": 97.0,
+            "Physical Aisle - Operational Optimum": 98.0,
+        }
+        run = self._modern_run("PARTIAL", distances)
+        del run["end_aware_distance_with_exit_m"]
+
+        self.assertEqual(get_history_objective_summary(run), {})
+        self.assertEqual(get_comparable_history_runs([run]), [])
+
+    def test_invalid_objective_values_are_legacy(self):
+        distances = {
+            "Baseline": 100.0,
+            "Grouped Aisle": 90.0,
+            "Greedy Nearest": 95.0,
+            "End Aware": 96.0,
+            "Physical Aisle - Distance Optimum": 97.0,
+            "Physical Aisle - Operational Optimum": 98.0,
+        }
+        valid_run = self._modern_run("INVALID", distances)
+
+        for invalid_value in (None, "90.0", True, float("nan"), float("inf"), -1.0):
+            with self.subTest(invalid_value=invalid_value):
+                run = copy.deepcopy(valid_run)
+                run["grouped_aisle_distance_with_exit_m"] = invalid_value
+                self.assertEqual(get_history_objective_summary(run), {})
+                self.assertEqual(get_comparable_history_runs([run]), [])
+
+    def test_invalid_best_heuristic_objective_summary_is_legacy(self):
+        distances = {
+            "Baseline": 100.0,
+            "Grouped Aisle": 90.0,
+            "Greedy Nearest": 95.0,
+            "End Aware": 96.0,
+            "Physical Aisle - Distance Optimum": 97.0,
+            "Physical Aisle - Operational Optimum": 98.0,
+        }
+        valid_run = self._modern_run("INVALID-SUMMARY", distances)
+
+        for invalid_value in (None, "90.0", True, float("nan"), float("inf"), -1.0):
+            with self.subTest(invalid_value=invalid_value):
+                run = copy.deepcopy(valid_run)
+                run["best_heuristic_distance_with_exit_m"] = invalid_value
+                self.assertEqual(get_history_objective_summary(run), {})
+
+    def test_aggregation_uses_exit_distance_and_excludes_legacy(self):
+        runs = [
+            self._modern_run(
+                "B1",
+                {
+                    "Baseline": 100.0,
+                    "Grouped Aisle": 80.0,
+                    "Greedy Nearest": 70.0,
+                    "End Aware": 90.0,
+                    "Physical Aisle - Distance Optimum": 95.0,
+                    "Physical Aisle - Operational Optimum": 96.0,
+                },
+            ),
+            self._modern_run(
+                "B2",
+                {
+                    "Baseline": 200.0,
+                    "Grouped Aisle": 150.0,
+                    "Greedy Nearest": 160.0,
+                    "End Aware": 170.0,
+                    "Physical Aisle - Distance Optimum": 180.0,
+                    "Physical Aisle - Operational Optimum": 190.0,
+                },
+            ),
+            self._modern_run(
+                "B3",
+                {
+                    "Baseline": 300.0,
+                    "Grouped Aisle": 210.0,
+                    "Greedy Nearest": 220.0,
+                    "End Aware": 230.0,
+                    "Physical Aisle - Distance Optimum": 240.0,
+                    "Physical Aisle - Operational Optimum": 250.0,
+                },
+            ),
+            {
+                "batch_id": "LEGACY",
+                "optimizer_version": "v0.1",
+                "baseline_distance_m": 1.0,
+                "greedy_distance_m": 0.0,
+                "best_distance_method": "Greedy Nearest",
+            },
+        ]
+
+        comparable_runs = get_comparable_history_runs(runs)
+        summaries = [get_history_objective_summary(run) for run in comparable_runs]
+        differences_m = [
+            summary["baseline_distance_with_exit_m"]
+            - summary["best_heuristic_distance_with_exit_m"]
+            for summary in summaries
+        ]
+        method_counts = {}
+        for summary in summaries:
+            method = summary["best_heuristic_method"]
+            method_counts[method] = method_counts.get(method, 0) + 1
+
+        self.assertEqual(len(comparable_runs), 3)
+        self.assertEqual(differences_m, [30.0, 50.0, 90.0])
+        self.assertAlmostEqual(statistics.mean(differences_m), 56.666666666)
+        self.assertEqual(statistics.median(differences_m), 50.0)
+        self.assertEqual(method_counts, {"Greedy Nearest": 1, "Grouped Aisle": 2})
+
+    def test_simulation_and_historical_sources_remain_separate(self):
+        save_benchmark_run(
+            self.temp_history_path,
+            {
+                "batch_id": "BATCH-HIST-1",
+                "optimizer_version": OPTIMIZER_VERSION,
+                "source": "historical",
+            },
+        )
+        save_benchmark_run(
+            self.temp_history_path,
+            {
+                "batch_id": "BATCH-SIM-1",
+                "optimizer_version": OPTIMIZER_VERSION,
+                "source": "simulation",
+            },
+        )
+
+        runs = list(load_benchmark_history(self.temp_history_path).values())
+        historical_runs = [run for run in runs if run["source"] == "historical"]
+        simulation_runs = [run for run in runs if run["source"] == "simulation"]
+        self.assertEqual([run["batch_id"] for run in historical_runs], ["BATCH-HIST-1"])
+        self.assertEqual([run["batch_id"] for run in simulation_runs], ["BATCH-SIM-1"])
+
 
 if __name__ == "__main__":
     unittest.main()

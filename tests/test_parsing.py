@@ -1,7 +1,7 @@
 import unittest
 import sys
 import os
-import shutil
+import tempfile
 from datetime import datetime
 
 # Append the project root so we can import modules
@@ -179,45 +179,34 @@ class TestPickBatches(unittest.TestCase):
     def test_persistence_saving_loading_deleting(self):
         # 9. Batch kann gespeichert werden.
         # 10. gespeicherte Batch kann wieder geladen werden.
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        temp_db_path = os.path.join(base_dir, "data", "test_temp_batches.json")
-        
-        # Clean up if exists
-        if os.path.exists(temp_db_path):
-            os.remove(temp_db_path)
-            
-        test_order = PickOrder(
-            order_id="BATCH-TEST-SAVE-LOAD",
-            timestamp_str="2026-08-14T01:00:00+02:00",
-            raw_picks_list=["04.002.30", "17.060.40"],
-            warehouse=self.warehouse,
-            source="manual"
-        )
-        
-        # Save
-        save_batch(temp_db_path, test_order)
-        self.assertTrue(os.path.exists(temp_db_path))
-        
-        # Load
-        loaded_batches = load_all_batches(temp_db_path, self.warehouse)
-        self.assertIn("BATCH-TEST-SAVE-LOAD", loaded_batches)
-        loaded_order = loaded_batches["BATCH-TEST-SAVE-LOAD"]
-        self.assertEqual(loaded_order.order_id, "BATCH-TEST-SAVE-LOAD")
-        self.assertEqual(loaded_order.pick_count, 2)
-        self.assertEqual(loaded_order.picks[0].raw_code, "04.002.30")
-        self.assertEqual(loaded_order.picks[1].raw_code, "17.060.40")
-        self.assertEqual(loaded_order.source, "manual")
-        
-        # Delete
-        success = delete_batch(temp_db_path, "BATCH-TEST-SAVE-LOAD")
-        self.assertTrue(success)
-        
-        loaded_after_delete = load_all_batches(temp_db_path, self.warehouse)
-        self.assertNotIn("BATCH-TEST-SAVE-LOAD", loaded_after_delete)
-        
-        # Clean up file
-        if os.path.exists(temp_db_path):
-            os.remove(temp_db_path)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_db_path = os.path.join(temp_dir, "test_batches.json")
+
+            test_order = PickOrder(
+                order_id="BATCH-TEST-SAVE-LOAD",
+                timestamp_str="2026-08-14T01:00:00+02:00",
+                raw_picks_list=["04.002.30", "17.060.40"],
+                warehouse=self.warehouse,
+                source="manual"
+            )
+
+            save_batch(temp_db_path, test_order)
+            self.assertTrue(os.path.exists(temp_db_path))
+
+            loaded_batches = load_all_batches(temp_db_path, self.warehouse)
+            self.assertIn("BATCH-TEST-SAVE-LOAD", loaded_batches)
+            loaded_order = loaded_batches["BATCH-TEST-SAVE-LOAD"]
+            self.assertEqual(loaded_order.order_id, "BATCH-TEST-SAVE-LOAD")
+            self.assertEqual(loaded_order.pick_count, 2)
+            self.assertEqual(loaded_order.picks[0].raw_code, "04.002.30")
+            self.assertEqual(loaded_order.picks[1].raw_code, "17.060.40")
+            self.assertEqual(loaded_order.source, "manual")
+
+            success = delete_batch(temp_db_path, "BATCH-TEST-SAVE-LOAD")
+            self.assertTrue(success)
+
+            loaded_after_delete = load_all_batches(temp_db_path, self.warehouse)
+            self.assertNotIn("BATCH-TEST-SAVE-LOAD", loaded_after_delete)
 
     def test_batch_id_uniqueness(self):
         # 11. Batch-ID ist eindeutig.
