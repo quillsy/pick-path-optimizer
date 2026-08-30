@@ -1,10 +1,18 @@
 import streamlit as st
 import os
 import pandas as pd
+from datetime import datetime
 from modules.warehouse import Warehouse
-from modules.picks import Pick, load_all_batches, save_batch, delete_batch, generate_next_batch_id
+from modules.picks import Pick, PickOrder, load_all_batches, save_batch, delete_batch, generate_next_batch_id
 from modules.routing import calculate_route_distance, calculate_route_metrics, get_original_route, get_simple_sorted_route
-from modules.optimizer_benchmark import benchmark_batch, load_benchmark_history, save_benchmark_run, OPTIMIZER_VERSION
+from modules.optimizer_benchmark import (
+    benchmark_batch,
+    get_comparable_history_runs,
+    get_history_objective_summary,
+    is_valid_objective_value,
+    load_benchmark_history,
+    summarize_benchmark_results,
+)
 from visualization.warehouse_map import draw_warehouse_map
 
 # Page configuration
@@ -236,7 +244,6 @@ elif navigation == "3. Pick-Batches":
                     all_batches = load_all_batches(BATCHES_PATH, warehouse)
                     new_id = generate_next_batch_id(list(all_batches.keys()))
                     
-                    from datetime import datetime
                     now_str = datetime.now().isoformat()
                     
                     new_order = PickOrder(
@@ -512,51 +519,62 @@ elif navigation == "5. Routenvergleich":
         batch_order = all_batches[selected_batch_id]
         
         # Trigger benchmark
-        results = benchmark_batch(batch_order.picks, warehouse, selected_batch_id)
+        results = benchmark_batch(
+            batch_order.picks, warehouse, selected_batch_id, persist=False
+        )
         
         # Display comparison table
         st.markdown("### 📊 Benchmark-Ergebnisse")
         
-        baseline_dist = 0.0
-        for r in results:
-            if r["method_name"] == "Baseline":
-                baseline_dist = r["total_distance_m"]
-                break
-                
+        winner_summary = summarize_benchmark_results(results)
+        baseline_dist = winner_summary["baseline_distance_with_exit_m"]
+
         df_comp = []
-        best_dist = float('inf')
-        best_method = ""
-        
         for r in results:
-            savings_m = baseline_dist - r["total_distance_m"]
-            savings_pct = (savings_m / baseline_dist * 100) if baseline_dist > 0 else 0.0
-            
-            savings_str = f"{savings_m:.2f} m ({savings_pct:.1f}%)" if r["method_name"] != "Baseline" else "0.0 % (Baseline)"
+            difference_m = baseline_dist - r["distance_with_exit_m"]
+            difference_pct = (difference_m / baseline_dist * 100) if baseline_dist > 0 else 0.0
+            if r["method_name"] == "Baseline":
+                difference_str = "Baseline"
+            elif difference_m > 0:
+                difference_str = f"{difference_m:.2f} m kürzer ({difference_pct:.1f}%)"
+            elif difference_m < 0:
+                difference_str = f"{-difference_m:.2f} m länger ({-difference_pct:.1f}%)"
+            else:
+                difference_str = "Gleich lang wie Baseline"
             
             df_comp.append({
                 "Methode": r["method_name"],
-                "Laufweg (m)": f"{r['total_distance_m']:.2f} m",
-                "Laufweg inkl. Rückweg (m)": f"{r['distance_with_exit_m']:.2f} m",
-                "Ersparnis": savings_str,
+                "Pick-Distanz (m)": f"{r['total_distance_m']:.2f} m",
+                "Weg zum Ausgang (m)": f"{r['end_distance_to_20_001_m']:.2f} m",
+                "Gesamtdistanz inklusive Ausgang (m)": f"{r['distance_with_exit_m']:.2f} m",
+                "Differenz zur Baseline": difference_str,
                 "Besuchte Gänge": r["physical_aisles_visited"],
                 "Backtracking (m)": f"{r['estimated_backtracking_distance_m']:.2f} m",
                 "Via Mitte": r["via_middle_count"],
                 "Max. Längslauf (m)": f"{r['max_single_aisle_traversal_m']:.2f} m",
                 "Wiederholte Gänge": r["repeated_aisle_visit_count"],
-                "Endweg zu 20.001 (m)": f"{r['end_distance_to_20_001_m']:.2f} m",
                 "Gültig?": "✅ Ja" if r["is_valid"] else "❌ Nein"
             })
-            
-            if r["is_valid"] and r["method_name"] != "Baseline" and r["total_distance_m"] < best_dist:
-                best_dist = r["total_distance_m"]
-                best_method = r["method_name"]
                 
         st.dataframe(pd.DataFrame(df_comp), use_container_width=True, hide_index=True)
-        
-        if best_method:
-            st.success(f"🏆 **Beste getestete Heuristik:** {best_method} mit {best_dist:.2f} m (Ersparnis: {baseline_dist - best_dist:.2f} m bzw. {((baseline_dist - best_dist)/baseline_dist*100):.1f}%)")
+
+        best_method = winner_summary["best_heuristic_method"]
+        best_dist = winner_summary["best_heuristic_distance_with_exit_m"]
+        if winner_summary["heuristic_improves_baseline"]:
+            saving_m = baseline_dist - best_dist
+            saving_pct = (saving_m / baseline_dist * 100) if baseline_dist > 0 else 0.0
+            st.success(
+                f"🏆 **Beste Methode einschließlich Baseline:** {winner_summary['best_overall_method']} – "
+                f"Distanz inklusive Ausgang: {best_dist:.2f} m "
+                f"({saving_m:.2f} m bzw. {saving_pct:.1f}% kürzer als die Baseline)."
+            )
         else:
-            st.info("Keine der Heuristiken konnte die Baseline verbessern.")
+            st.warning("Keine getestete Heuristik verbessert die Baseline.")
+            st.info(
+                f"Beste getestete Heuristik: {best_method} mit {best_dist:.2f} m Distanz "
+                f"inklusive Ausgang. Beste Methode einschließlich Baseline: "
+                f"{winner_summary['best_overall_method']}."
+            )
             
         # Select method to visualize
         st.markdown("---")
@@ -584,7 +602,9 @@ elif navigation == "5. Routenvergleich":
         col1, col2 = st.columns([3, 7])
         with col1:
             st.markdown(f"#### Details: {selected_method}")
-            st.metric("Berechneter Weg", f"{chosen_run['total_distance_m']:.2f} m")
+            st.metric("Pick-Distanz", f"{chosen_run['total_distance_m']:.2f} m")
+            st.metric("Weg zum Ausgang", f"{chosen_run['end_distance_to_20_001_m']:.2f} m")
+            st.metric("Gesamtdistanz inklusive Ausgang", f"{chosen_run['distance_with_exit_m']:.2f} m")
             
             st.markdown("**Metriken:**")
             st.write(f"- **Picks:** {chosen_run['pick_count']}")
@@ -679,36 +699,54 @@ elif navigation == "6. Benchmark":
                 with st.spinner("Berechne Routen für alle 6 Optimierungsansätze..."):
                     results = benchmark_batch(selected_batch.picks, warehouse, selected_batch_id, selected_batch.source)
                     
-                    # Highlight winner
-                    baseline_dist = next(r["total_distance_m"] for r in results if r["method_name"] == "Baseline")
-                    best_dist = min(r["total_distance_m"] for r in results if r["is_valid"] and r["method_name"] != "Baseline")
-                    best_method = next(r["method_name"] for r in results if r["total_distance_m"] == best_dist)
-                    
-                    saving_m = baseline_dist - best_dist
-                    saving_pct = (saving_m / baseline_dist * 100) if baseline_dist > 0 else 0.0
-                    
-                    st.success(f"🏆 **Benchmark abgeschlossen!** Beste getestete Heuristik: **{best_method}** mit **{best_dist:.2f} m** (Ersparnis von **{saving_m:.2f} m** bzw. **{saving_pct:.1f}%**).")
+                    winner_summary = summarize_benchmark_results(results)
+                    baseline_dist = winner_summary["baseline_distance_with_exit_m"]
+                    best_dist = winner_summary["best_heuristic_distance_with_exit_m"]
+                    best_method = winner_summary["best_heuristic_method"]
+                    if winner_summary["heuristic_improves_baseline"]:
+                        saving_m = baseline_dist - best_dist
+                        saving_pct = (saving_m / baseline_dist * 100) if baseline_dist > 0 else 0.0
+                        st.success(
+                            f"🏆 **Benchmark abgeschlossen! Beste Methode einschließlich Baseline:** "
+                            f"**{winner_summary['best_overall_method']}** mit **{best_dist:.2f} m "
+                            f"Distanz inklusive Ausgang** ({saving_m:.2f} m bzw. "
+                            f"{saving_pct:.1f}% kürzer als die Baseline)."
+                        )
+                    else:
+                        st.warning("Keine getestete Heuristik verbessert die Baseline.")
+                        st.info(
+                            f"Beste getestete Heuristik: {best_method} mit {best_dist:.2f} m Distanz "
+                            f"inklusive Ausgang. Beste Methode einschließlich Baseline: "
+                            f"{winner_summary['best_overall_method']}."
+                        )
                     
                     # Display results sorted by distance ascending
-                    sorted_results = sorted(results, key=lambda r: r["total_distance_m"])
+                    sorted_results = sorted(results, key=lambda r: r["distance_with_exit_m"])
                     
                     df_comp = []
                     for r in sorted_results:
-                        s_m = baseline_dist - r["total_distance_m"]
-                        s_pct = (s_m / baseline_dist * 100) if baseline_dist > 0 else 0.0
-                        s_str = f"{s_m:.2f} m ({s_pct:.1f}%)" if r["method_name"] != "Baseline" else "0.0 % (Baseline)"
+                        difference_m = baseline_dist - r["distance_with_exit_m"]
+                        difference_pct = (difference_m / baseline_dist * 100) if baseline_dist > 0 else 0.0
+                        if r["method_name"] == "Baseline":
+                            difference_str = "Baseline"
+                        elif difference_m > 0:
+                            difference_str = f"{difference_m:.2f} m kürzer ({difference_pct:.1f}%)"
+                        elif difference_m < 0:
+                            difference_str = f"{-difference_m:.2f} m länger ({-difference_pct:.1f}%)"
+                        else:
+                            difference_str = "Gleich lang wie Baseline"
                         
                         df_comp.append({
                             "Methode": r["method_name"],
-                            "Laufweg (m)": f"{r['total_distance_m']:.2f} m",
-                            "Laufweg inkl. Rückweg (m)": f"{r['distance_with_exit_m']:.2f} m",
-                            "Ersparnis": s_str,
+                            "Pick-Distanz (m)": f"{r['total_distance_m']:.2f} m",
+                            "Weg zum Ausgang (m)": f"{r['end_distance_to_20_001_m']:.2f} m",
+                            "Gesamtdistanz inklusive Ausgang (m)": f"{r['distance_with_exit_m']:.2f} m",
+                            "Differenz zur Baseline": difference_str,
                             "Besuchte Gänge": r["physical_aisles_visited"],
                             "Backtracking (m)": f"{r['estimated_backtracking_distance_m']:.2f} m",
                             "Via Mitte": r["via_middle_count"],
                             "Max. Längslauf (m)": f"{r['max_single_aisle_traversal_m']:.2f} m",
                             "Wiederholte Gänge": r["repeated_aisle_visit_count"],
-                            "Endweg zu 20.001 (m)": f"{r['end_distance_to_20_001_m']:.2f} m",
                             "Gültig?": "✅ Ja" if r["is_valid"] else "❌ Nein"
                         })
                     st.dataframe(pd.DataFrame(df_comp), use_container_width=True, hide_index=True)
@@ -737,103 +775,138 @@ elif navigation == "6. Benchmark":
                 # History table
                 records = []
                 for r in filtered_runs:
-                    best_val = min(
-                        r["grouped_aisle_distance_m"],
-                        r["greedy_distance_m"],
-                        r["end_aware_distance_m"],
-                        r["physical_distance_optimum_m"],
-                        r["physical_operational_optimum_m"]
-                    )
-                    savings_m = r["baseline_distance_m"] - best_val
-                    savings_pct = (savings_m / r["baseline_distance_m"] * 100) if r["baseline_distance_m"] > 0 else 0.0
+                    objective_summary = get_history_objective_summary(r)
+                    if objective_summary:
+                        best_method = objective_summary["best_heuristic_method"]
+                        best_overall_method = objective_summary["best_overall_method"]
+                        best_val = objective_summary["best_heuristic_distance_with_exit_m"]
+                        baseline_val = objective_summary["baseline_distance_with_exit_m"]
+                        difference_m = baseline_val - best_val
+                        difference_pct = (difference_m / baseline_val * 100) if baseline_val > 0 else 0.0
+                        baseline_display = f"{baseline_val:.2f} m"
+                        best_display = f"{best_val:.2f} m"
+                        if difference_m > 0:
+                            difference_display = f"{difference_m:.2f} m kürzer ({difference_pct:.1f}%)"
+                        elif difference_m < 0:
+                            difference_display = f"{-difference_m:.2f} m länger ({-difference_pct:.1f}%)"
+                        else:
+                            difference_display = "Gleich lang"
+                        if objective_summary["heuristic_improves_baseline"]:
+                            result_display = "Beste Heuristik verbessert die Baseline."
+                        else:
+                            result_display = "Keine getestete Heuristik verbessert die Baseline."
+                    else:
+                        best_method = "Legacy – Benchmark neu ausführen"
+                        best_overall_method = "Legacy – nicht vergleichbar"
+                        baseline_display = "Legacy/ungültig"
+                        best_display = "Legacy/ungültig"
+                        difference_display = "–"
+                        result_display = "Nicht für Gewinner oder Aggregate verwendet"
                     
                     records.append({
-                        "Batch-ID": r["batch_id"],
-                        "Picks": r["pick_count"],
+                        "Batch-ID": r.get("batch_id", "Unbekannt"),
+                        "Picks": r.get("pick_count", "–"),
                         "Quelle": "Manuell / Historisch" if r.get("source", "historical") == "historical" else "Simulation / Synthetisch",
-                        "Baseline (m)": f"{r['baseline_distance_m']:.2f} m",
-                        "Best Heuristic (m)": f"{best_val:.2f} m",
-                        "Ersparnis (%)": f"{savings_pct:.1f}%",
-                        "Beste Methode": r["best_distance_method"],
-                        "Datum": r["timestamp"][:16].replace("T", " ")
+                        "Baseline – Distanz inklusive Ausgang": baseline_display,
+                        "Beste Heuristik – Distanz inklusive Ausgang": best_display,
+                        "Differenz zur Baseline": difference_display,
+                        "Beste Heuristik": best_method,
+                        "Beste Methode einschließlich Baseline": best_overall_method,
+                        "Ergebnis": result_display,
+                        "Datum": r.get("timestamp", "Unbekannt")[:16].replace("T", " ")
                     })
                 st.dataframe(pd.DataFrame(records), use_container_width=True, hide_index=True)
                 
-                # Aggregated Statistics (requires >= 2 runs)
-                if len(filtered_runs) >= 2:
+                comparable_runs = get_comparable_history_runs(filtered_runs)
+                legacy_count = len(filtered_runs) - len(comparable_runs)
+                if legacy_count:
+                    st.info(
+                        f"{legacy_count} Legacy- oder ungültige Benchmark-Einträge werden nicht "
+                        "für Gewinner oder Aggregate verwendet."
+                    )
+
+                # Aggregated Statistics (requires >= 2 comparable runs)
+                if len(comparable_runs) >= 2:
                     st.markdown("### 📊 Aggregierte Benchmark-Statistik")
-                    
-                    baselines = [r["baseline_distance_m"] for r in filtered_runs]
-                    
+
+                    comparable_summaries = [
+                        get_history_objective_summary(r) for r in comparable_runs
+                    ]
+                    baselines = [s["baseline_distance_with_exit_m"] for s in comparable_summaries]
                     best_dists = []
-                    savings_m_list = []
-                    savings_pct_list = []
+                    differences_m = []
+                    differences_pct = []
                     backtrackings_base = []
                     backtrackings_best = []
-                    
-                    for r in filtered_runs:
-                        best_val = min(
-                            r["grouped_aisle_distance_m"],
-                            r["greedy_distance_m"],
-                            r["end_aware_distance_m"],
-                            r["physical_distance_optimum_m"],
-                            r["physical_operational_optimum_m"]
-                        )
+                    best_methods = []
+                    improvement_count = 0
+                    backtracking_fields = {
+                        "Grouped Aisle": "grouped_backtracking_m",
+                        "Greedy Nearest": "greedy_backtracking_m",
+                        "End Aware": "end_aware_backtracking_m",
+                        "Physical Aisle - Distance Optimum": "physical_distance_backtracking_m",
+                        "Physical Aisle - Operational Optimum": "physical_operational_backtracking_m",
+                    }
+                    for r, objective_summary in zip(comparable_runs, comparable_summaries):
+                        best_method_key = objective_summary["best_heuristic_method"]
+                        best_methods.append(best_method_key)
+                        best_val = objective_summary["best_heuristic_distance_with_exit_m"]
+                        baseline_val = objective_summary["baseline_distance_with_exit_m"]
                         best_dists.append(best_val)
-                        s_m = r["baseline_distance_m"] - best_val
-                        savings_m_list.append(s_m)
-                        savings_pct_list.append((s_m / r["baseline_distance_m"] * 100) if r["baseline_distance_m"] > 0 else 0.0)
-                        
-                        backtrackings_base.append(r["baseline_backtracking_m"])
-                        
-                        best_method_key = r["best_distance_method"]
-                        bt_key = "baseline_backtracking_m"
-                        if "Grouped" in best_method_key:
-                            bt_key = "grouped_backtracking_m"
-                        elif "Greedy" in best_method_key:
-                            bt_key = "greedy_backtracking_m"
-                        elif "End Aware" in best_method_key:
-                            bt_key = "end_aware_backtracking_m"
-                        elif "Distance" in best_method_key:
-                            bt_key = "physical_distance_backtracking_m"
-                        elif "Operational" in best_method_key:
-                            bt_key = "physical_operational_backtracking_m"
-                        backtrackings_best.append(r.get(bt_key, 0.0))
+                        difference_m = baseline_val - best_val
+                        differences_m.append(difference_m)
+                        differences_pct.append(
+                            (difference_m / baseline_val * 100) if baseline_val > 0 else 0.0
+                        )
+                        if objective_summary["heuristic_improves_baseline"]:
+                            improvement_count += 1
+
+                        baseline_backtracking = r.get("baseline_backtracking_m")
+                        heuristic_backtracking = r.get(backtracking_fields[best_method_key])
+                        if is_valid_objective_value(baseline_backtracking):
+                            backtrackings_base.append(baseline_backtracking)
+                        if is_valid_objective_value(heuristic_backtracking):
+                            backtrackings_best.append(heuristic_backtracking)
                         
                     import statistics
                     
                     c1, c2, c3 = st.columns(3)
                     with c1:
-                        st.metric("Ø Baseline Laufweg", f"{statistics.mean(baselines):.2f} m")
-                        st.metric("Ø Optimierter Laufweg", f"{statistics.mean(best_dists):.2f} m")
+                        st.metric("Ø Baseline – Distanz inklusive Ausgang", f"{statistics.mean(baselines):.2f} m")
+                        st.metric("Ø beste Heuristik – Distanz inklusive Ausgang", f"{statistics.mean(best_dists):.2f} m")
                     with c2:
-                        st.metric("Ø Einsparung (m)", f"{statistics.mean(savings_m_list):.2f} m")
-                        st.metric("Ø Einsparung (%)", f"{statistics.mean(savings_pct_list):.1f}%")
+                        st.metric("Ø Differenz zur Baseline (m)", f"{statistics.mean(differences_m):.2f} m")
+                        st.metric("Ø Differenz zur Baseline (%)", f"{statistics.mean(differences_pct):.1f}%")
                     with c3:
-                        st.metric("Median Einsparung (%)", f"{statistics.median(savings_pct_list):.1f}%")
-                        st.metric("Laufweg-Ersparnis Range", f"{min(savings_pct_list):.1f}% - {max(savings_pct_list):.1f}%")
+                        st.metric("Median Differenz zur Baseline (%)", f"{statistics.median(differences_pct):.1f}%")
+                        st.metric("Heuristik verbessert Baseline", f"{improvement_count} von {len(comparable_runs)}")
+
+                    st.caption("Positive Differenzwerte bedeuten eine Verbesserung gegenüber der Baseline.")
+                    if improvement_count == 0:
+                        st.warning("Keine getestete Heuristik verbessert die Baseline.")
                         
                     # Backtracking metrics
                     st.markdown("#### Backtracking-Vergleich")
                     c_bt1, c_bt2 = st.columns(2)
                     with c_bt1:
-                        st.metric("Ø Backtracking (Baseline)", f"{statistics.mean(backtrackings_base):.2f} m")
-                        st.metric("Median Backtracking (Baseline)", f"{statistics.median(backtrackings_base):.2f} m")
+                        if backtrackings_base:
+                            st.metric("Ø Backtracking (Baseline)", f"{statistics.mean(backtrackings_base):.2f} m")
+                            st.metric("Median Backtracking (Baseline)", f"{statistics.median(backtrackings_base):.2f} m")
                     with c_bt2:
-                        st.metric("Ø Backtracking (Beste Heuristik)", f"{statistics.mean(backtrackings_best):.2f} m")
-                        st.metric("Median Backtracking (Beste Heuristik)", f"{statistics.median(backtrackings_best):.2f} m")
+                        if backtrackings_best:
+                            st.metric("Ø Backtracking (Beste Heuristik)", f"{statistics.mean(backtrackings_best):.2f} m")
+                            st.metric("Median Backtracking (Beste Heuristik)", f"{statistics.median(backtrackings_best):.2f} m")
                         
                     # Method success counts
-                    st.markdown("### 🏆 Methodenerfolg (Kürzeste Strecke)")
+                    st.markdown("### Beste getestete Heuristik nach Distanz inklusive Ausgang")
                     best_counts = {}
-                    for r in filtered_runs:
-                        method = r["best_distance_method"]
+                    for method in best_methods:
                         best_counts[method] = best_counts.get(method, 0) + 1
                         
                     df_counts = pd.DataFrame(list(best_counts.items()), columns=["Optimierungsmethode", "Häufigkeit"]).set_index("Optimierungsmethode")
                     st.bar_chart(df_counts)
                     for m, cnt in sorted(best_counts.items(), key=lambda x: x[1], reverse=True):
-                        st.write(f"- **{m}:** {cnt} mal kürzeste Route")
+                        st.write(f"- **{m}:** {cnt} mal kürzeste getestete Heuristik")
                         
     with tab_sim:
         st.subheader("🎲 Synthetische Picklisten generieren")

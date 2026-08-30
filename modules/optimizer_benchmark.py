@@ -1,6 +1,8 @@
 import os
 import json
+import math
 from datetime import datetime
+from numbers import Real
 from typing import List, Dict, Any
 from modules.warehouse import Warehouse
 from modules.picks import Pick
@@ -16,7 +18,138 @@ from modules.optimization import (
     PhysicalAisleOperationalOptimizer
 )
 
-OPTIMIZER_VERSION = "v0.1"
+OPTIMIZER_VERSION = "v0.2"
+OBJECTIVE_DISTANCE_KEY = "distance_with_exit_m"
+HISTORY_OBJECTIVE_FIELDS = {
+    "Baseline": "baseline_distance_with_exit_m",
+    "Grouped Aisle": "grouped_aisle_distance_with_exit_m",
+    "Greedy Nearest": "greedy_distance_with_exit_m",
+    "End Aware": "end_aware_distance_with_exit_m",
+    "Physical Aisle - Distance Optimum": "physical_distance_optimum_with_exit_m",
+    "Physical Aisle - Operational Optimum": "physical_operational_optimum_with_exit_m",
+}
+HISTORY_SUMMARY_FIELDS = (
+    "best_heuristic_method",
+    "best_heuristic_distance_with_exit_m",
+    "baseline_distance_with_exit_m",
+    "heuristic_improves_baseline",
+    "best_overall_method",
+)
+
+
+def is_valid_objective_value(value: Any) -> bool:
+    """Returns whether a persisted objective distance is a finite non-negative number."""
+    if not isinstance(value, Real) or isinstance(value, bool) or value < 0:
+        return False
+    if isinstance(value, int):
+        return True
+    try:
+        return math.isfinite(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def select_best_result(results: List[Dict[str, Any]], exclude_baseline: bool = False) -> Dict[str, Any]:
+    """Returns the valid result with the shortest route including the exit at 20.001."""
+    candidates = [
+        result for result in results
+        if result.get("is_valid", False)
+        and is_valid_objective_value(result.get(OBJECTIVE_DISTANCE_KEY))
+        and (not exclude_baseline or result.get("method_name") != "Baseline")
+    ]
+    if not candidates:
+        raise ValueError("No valid benchmark result available.")
+    return min(candidates, key=lambda result: result[OBJECTIVE_DISTANCE_KEY])
+
+
+def summarize_benchmark_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Builds the binding baseline, heuristic and overall winner semantics."""
+    baseline_results = [
+        result for result in results
+        if result.get("method_name") == "Baseline"
+        and result.get("is_valid", False)
+        and is_valid_objective_value(result.get(OBJECTIVE_DISTANCE_KEY))
+    ]
+    if len(baseline_results) != 1:
+        raise ValueError("Exactly one valid Baseline result is required.")
+
+    baseline_result = baseline_results[0]
+    best_heuristic = select_best_result(results, exclude_baseline=True)
+    baseline_distance = baseline_result[OBJECTIVE_DISTANCE_KEY]
+    best_heuristic_distance = best_heuristic[OBJECTIVE_DISTANCE_KEY]
+    heuristic_improves_baseline = best_heuristic_distance < baseline_distance
+
+    return {
+        "best_heuristic_method": best_heuristic["method_name"],
+        "best_heuristic_distance_with_exit_m": best_heuristic_distance,
+        "baseline_distance_with_exit_m": baseline_distance,
+        "heuristic_improves_baseline": heuristic_improves_baseline,
+        "best_overall_method": (
+            best_heuristic["method_name"] if heuristic_improves_baseline else "Baseline"
+        ),
+    }
+
+
+def summarize_objective_distances(distances: Dict[str, float]) -> Dict[str, Any]:
+    """Builds winner semantics from validated persisted objective distances."""
+    baseline_distance = distances["Baseline"]
+    heuristic_distances = {
+        method: distance for method, distance in distances.items()
+        if method != "Baseline"
+    }
+    best_heuristic_method = min(heuristic_distances, key=heuristic_distances.get)
+    best_heuristic_distance = heuristic_distances[best_heuristic_method]
+    heuristic_improves_baseline = best_heuristic_distance < baseline_distance
+
+    return {
+        "best_heuristic_method": best_heuristic_method,
+        "best_heuristic_distance_with_exit_m": best_heuristic_distance,
+        "baseline_distance_with_exit_m": baseline_distance,
+        "heuristic_improves_baseline": heuristic_improves_baseline,
+        "best_overall_method": (
+            best_heuristic_method if heuristic_improves_baseline else "Baseline"
+        ),
+    }
+
+
+def get_history_objective_summary(run: Dict[str, Any]) -> Dict[str, Any]:
+    """Returns a validated modern history summary, or an empty dict for legacy data."""
+    if run.get("optimizer_version") != OPTIMIZER_VERSION:
+        return {}
+    if not all(field in run for field in HISTORY_OBJECTIVE_FIELDS.values()):
+        return {}
+    if not all(field in run for field in HISTORY_SUMMARY_FIELDS):
+        return {}
+
+    distances = {
+        method_name: run[field]
+        for method_name, field in HISTORY_OBJECTIVE_FIELDS.items()
+    }
+    if not all(is_valid_objective_value(value) for value in distances.values()):
+        return {}
+
+    expected_summary = summarize_objective_distances(distances)
+    if not is_valid_objective_value(run["best_heuristic_distance_with_exit_m"]):
+        return {}
+    if not isinstance(run["heuristic_improves_baseline"], bool):
+        return {}
+    for field in HISTORY_SUMMARY_FIELDS:
+        if run[field] != expected_summary[field]:
+            return {}
+
+    return {**expected_summary, "distances": distances}
+
+
+def get_history_objective_distances(run: Dict[str, Any]) -> Dict[str, float]:
+    """Returns validated comparable distances, or an empty dict for legacy data."""
+    summary = get_history_objective_summary(run)
+    return summary.get("distances", {})
+
+
+def get_comparable_history_runs(runs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Filters history records to fully validated modern objective records."""
+    return [run for run in runs if get_history_objective_summary(run)]
+
 
 def calculate_direction_changes(route: List[Pick]) -> int:
     """Calculates the number of direction changes within the same physical aisles."""
@@ -70,16 +203,32 @@ def save_benchmark_run(file_path: str, run_data: Dict[str, Any]) -> None:
     
     history[key] = run_data
     
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    history_parent = os.path.dirname(file_path)
+    if history_parent:
+        os.makedirs(history_parent, exist_ok=True)
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=2, ensure_ascii=False)
 
 
-def benchmark_batch(picks: List[Pick], warehouse: Warehouse, batch_id: str = "custom", source: str = "historical") -> List[Dict[str, Any]]:
+def benchmark_batch(
+        picks: List[Pick], warehouse: Warehouse, batch_id: str = "custom",
+        source: str = "historical", persist: bool = True,
+        history_path: str = None, results_path: str = None) -> List[Dict[str, Any]]:
     """
     Runs all 6 optimizers on the batch and calculates complete metrics.
-    Saves results to data/benchmark_results.json and the run to data/benchmark_history.json.
+    Persists results only when ``persist`` is true. Custom paths keep tests and
+    other isolated callers away from the production files under ``data/``.
     """
+    if (history_path is None) != (results_path is None):
+        raise ValueError(
+            "history_path and results_path must either both be provided or both be omitted."
+        )
+
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if history_path is None and results_path is None:
+        history_path = os.path.join(base_dir, "data", "benchmark_history.json")
+        results_path = os.path.join(base_dir, "data", "benchmark_results.json")
+
     optimizers = {
         "Baseline": BaselineOptimizer(),
         "Grouped Aisle": GroupedAisleOptimizer(),
@@ -90,8 +239,6 @@ def benchmark_batch(picks: List[Pick], warehouse: Warehouse, batch_id: str = "cu
     }
     
     results = []
-    exit_pick = Pick("20.001.01", warehouse)
-    
     for name, opt in optimizers.items():
         optimized_route = opt.optimize(picks, warehouse)
         is_valid = validate_optimized_route(picks, optimized_route)
@@ -133,26 +280,7 @@ def benchmark_batch(picks: List[Pick], warehouse: Warehouse, batch_id: str = "cu
             "route_codes": [p.raw_code for p in optimized_route]
         })
         
-    # Determine best methods
-    best_dist = float('inf')
-    best_dist_name = ""
-    for r in results:
-        if r["is_valid"] and r["total_distance_m"] < best_dist:
-            best_dist = r["total_distance_m"]
-            best_dist_name = r["method_name"]
-            
-    best_op_score = float('inf')
-    best_op_name = ""
-    for r in results:
-        if r["is_valid"]:
-            score = calculate_operational_score(r)
-            if score < best_op_score:
-                best_op_score = score
-                best_op_name = r["method_name"]
-                
-    # Build history record
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    history_path = os.path.join(base_dir, "data", "benchmark_history.json")
+    winner_summary = summarize_benchmark_results(results)
     
     # Calculate density profile
     aisle_density = {}
@@ -172,6 +300,13 @@ def benchmark_batch(picks: List[Pick], warehouse: Warehouse, batch_id: str = "cu
         "end_aware_distance_m": next(r["total_distance_m"] for r in results if r["method_name"] == "End Aware"),
         "physical_distance_optimum_m": next(r["total_distance_m"] for r in results if r["method_name"] == "Physical Aisle - Distance Optimum"),
         "physical_operational_optimum_m": next(r["total_distance_m"] for r in results if r["method_name"] == "Physical Aisle - Operational Optimum"),
+
+        "baseline_distance_with_exit_m": next(r[OBJECTIVE_DISTANCE_KEY] for r in results if r["method_name"] == "Baseline"),
+        "grouped_aisle_distance_with_exit_m": next(r[OBJECTIVE_DISTANCE_KEY] for r in results if r["method_name"] == "Grouped Aisle"),
+        "greedy_distance_with_exit_m": next(r[OBJECTIVE_DISTANCE_KEY] for r in results if r["method_name"] == "Greedy Nearest"),
+        "end_aware_distance_with_exit_m": next(r[OBJECTIVE_DISTANCE_KEY] for r in results if r["method_name"] == "End Aware"),
+        "physical_distance_optimum_with_exit_m": next(r[OBJECTIVE_DISTANCE_KEY] for r in results if r["method_name"] == "Physical Aisle - Distance Optimum"),
+        "physical_operational_optimum_with_exit_m": next(r[OBJECTIVE_DISTANCE_KEY] for r in results if r["method_name"] == "Physical Aisle - Operational Optimum"),
         
         "baseline_backtracking_m": next(r["estimated_backtracking_distance_m"] for r in results if r["method_name"] == "Baseline"),
         "grouped_backtracking_m": next(r["estimated_backtracking_distance_m"] for r in results if r["method_name"] == "Grouped Aisle"),
@@ -180,8 +315,11 @@ def benchmark_batch(picks: List[Pick], warehouse: Warehouse, batch_id: str = "cu
         "physical_distance_backtracking_m": next(r["estimated_backtracking_distance_m"] for r in results if r["method_name"] == "Physical Aisle - Distance Optimum"),
         "physical_operational_backtracking_m": next(r["estimated_backtracking_distance_m"] for r in results if r["method_name"] == "Physical Aisle - Operational Optimum"),
         
-        "best_distance_method": best_dist_name,
-        "best_operational_method": best_op_name,
+        **winner_summary,
+
+        # Compatibility fields retained for existing readers.
+        "best_distance_method": winner_summary["best_overall_method"],
+        "best_operational_method": winner_summary["best_overall_method"],
         
         "batch_profile": {
             "physical_aisles_visited": len(set(p.physical_aisle_id for p in picks if p.physical_aisle_id is not None)),
@@ -192,10 +330,12 @@ def benchmark_batch(picks: List[Pick], warehouse: Warehouse, batch_id: str = "cu
         }
     }
     
+    if not persist:
+        return results
+
     save_benchmark_run(history_path, run_record)
-    
+
     # Also save comparison cache for the UI run page
-    results_path = os.path.join(base_dir, "data", "benchmark_results.json")
     existing_data = {}
     if os.path.exists(results_path):
         try:
@@ -204,12 +344,16 @@ def benchmark_batch(picks: List[Pick], warehouse: Warehouse, batch_id: str = "cu
         except json.JSONDecodeError:
             pass
             
-    existing_data[batch_id] = {
+    results_key = f"{batch_id}::{OPTIMIZER_VERSION}"
+    existing_data[results_key] = {
         "batch_id": batch_id,
+        "optimizer_version": OPTIMIZER_VERSION,
+        **winner_summary,
         "runs": [
             {
                 "method_name": r["method_name"],
                 "total_distance_m": r["total_distance_m"],
+                "distance_with_exit_m": r["distance_with_exit_m"],
                 "estimated_backtracking_distance_m": r["estimated_backtracking_distance_m"],
                 "via_middle_count": r["via_middle_count"],
                 "repeated_aisle_visit_count": r["repeated_aisle_visit_count"],
@@ -219,6 +363,9 @@ def benchmark_batch(picks: List[Pick], warehouse: Warehouse, batch_id: str = "cu
         ]
     }
     
+    results_parent = os.path.dirname(results_path)
+    if results_parent:
+        os.makedirs(results_parent, exist_ok=True)
     with open(results_path, "w", encoding="utf-8") as f:
         json.dump(existing_data, f, indent=2, ensure_ascii=False)
         
