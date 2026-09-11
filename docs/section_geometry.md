@@ -101,7 +101,7 @@ Die folgenden Module wurden in diesem Schritt **nicht verändert**:
 - `visualization/warehouse_map.py`
 - `app.py`
 
-**Die bestehende Routenberechnung ist durch diesen Schritt noch nicht repariert.**  
+**Die bestehende Routenberechnung ist durch diesen Schritt noch nicht repariert.**\
 Die bisherigen Meterangaben (z. B. Baseline 935,59 m für BATCH-HISTORICAL-0001)
 sind weiterhin nicht als bestätigte reale Laufstrecken freigegeben.
 
