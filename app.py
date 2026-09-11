@@ -1,9 +1,11 @@
 import streamlit as st
 import os
 import pandas as pd
-from datetime import datetime
+import hashlib
+from datetime import datetime, timezone
 from modules.warehouse import Warehouse
 from modules.picks import Pick, PickOrder, load_all_batches, save_batch, delete_batch, generate_next_batch_id
+from modules.batch_backup import read_batch_backup
 from modules.routing import calculate_route_distance, calculate_route_metrics, get_original_route, get_simple_sorted_route
 from modules.optimizer_benchmark import (
     benchmark_batch,
@@ -96,7 +98,7 @@ navigation = st.sidebar.radio(
 if navigation == "1. Übersicht":
     st.markdown("<h1 class='main-header'>Pick Path Optimizer</h1>", unsafe_allow_html=True)
     st.markdown("<p class='sub-header'>Mathematische Analyse und Laufwegoptimierung für die Lagerlogistik</p>", unsafe_allow_html=True)
-    
+
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.markdown("""
@@ -126,14 +128,14 @@ if navigation == "1. Übersicht":
             <div class='metric-value'>ca. 110,63 m</div>
         </div>
         """, unsafe_allow_html=True)
-        
+
     st.markdown("### Über das Projekt")
     st.write(
         "Der **Pick Path Optimizer** dient der Analyse und Optimierung von Laufwegen im Kommissionierprozess. "
         "Durch die mathematische Abbildung des realen Lagers (inklusive Quergängen, Regaltiefen und Gassen) "
         "kann das System Laufwege berechnen, simulieren und Einsparpotenziale aufzeigen."
     )
-    
+
     st.markdown("### Funktionsweise in Schritt 1")
     st.markdown(
         "1. **Strukturierte Erfassung:** Das Lager wird über eine zentrale `warehouse.json` konfiguriert (Shelf-Maße, Quergangbreiten, x-Koordinaten).\n"
@@ -148,12 +150,12 @@ if navigation == "1. Übersicht":
 elif navigation == "2. Lagerdaten":
     st.markdown("<h1 class='main-header'>Lagerkonfiguration</h1>", unsafe_allow_html=True)
     st.markdown("<p class='sub-header'>Ausgelesene Parameter aus der zentralen JSON-Konfigurationsdatei</p>", unsafe_allow_html=True)
-    
+
     st.subheader("Geometrische Maße")
     geo = warehouse.geometry
     geo_data = {
         "Parameter": [
-            "Regallänge (m)", "Regalhöhe (m)", "Regaltiefe (m)", 
+            "Regallänge (m)", "Regalhöhe (m)", "Regaltiefe (m)",
             "Hauptwegbreite im Regalbereich (m)", "Mittel-/Quergang Breite (m)"
         ],
         "Wert": [
@@ -162,7 +164,7 @@ elif navigation == "2. Lagerdaten":
         ]
     }
     st.table(pd.DataFrame(geo_data))
-    
+
     st.subheader("Regalgänge und Stellplatzseiten")
     aisle_list = []
     for aisle in warehouse.aisles:
@@ -175,7 +177,7 @@ elif navigation == "2. Lagerdaten":
             "X-Koordinate (m)": aisle.x_position_m
         })
     st.dataframe(pd.DataFrame(aisle_list), use_container_width=True)
-    
+
     st.subheader("Spezielle Stellplätze")
     for elem in warehouse.special_elements:
         st.info(f"**{elem['name']}:** Seiten {elem['sides']} auf x={elem['x_position_m']}m, y={elem['y_position_m']}m (neben Gang 4)")
@@ -188,16 +190,16 @@ elif navigation == "2. Lagerdaten":
 elif navigation == "3. Pick-Batches":
     st.markdown("<h1 class='main-header'>Pick-Batches</h1>", unsafe_allow_html=True)
     st.markdown("<p class='sub-header'>Verwalten Sie Ihre Kommissionieraufträge: Neue Batches eingeben, validieren, speichern und historische Batches einsehen.</p>", unsafe_allow_html=True)
-    
+
     tab1, tab2 = st.tabs(["🆕 Neue Batch erfassen", "📜 Batch-Historie"])
-    
+
     with tab1:
         st.subheader("Pick-Codes eingeben")
         st.write("Geben Sie eine Liste von Pick-Codes untereinander (ein Code pro Zeile) ein. Format: `XX.YYY.ZZ` (z.B. `19.015.20`).")
-        
+
         # Helper to prefill test batch
         prefill = st.button("Mit realer Test-Batch (33 Picks) vorausfüllen", key="prefill_button")
-        
+
         test_batch_raw = (
             "05.056.50\n06.008.30\n07.002.30\n07.004.30\n08.041.30\n"
             "10.051.20\n10.046.40\n10.039.30\n10.029.30\n10.027.30\n"
@@ -207,9 +209,9 @@ elif navigation == "3. Pick-Batches":
             "17.027.30\n17.035.30\n17.084.40\n18.045.10\n19.015.20\n"
             "19.023.50\n20.028.10\n20.020.30"
         )
-        
+
         default_val = test_batch_raw if prefill else ""
-        
+
         raw_input = st.text_area(
             "Pick-Codes",
             value=default_val,
@@ -217,14 +219,14 @@ elif navigation == "3. Pick-Batches":
             placeholder="z.B.\n05.056.50\n06.008.30\n...",
             key="input_textarea"
         )
-        
+
         if st.button("Batch validieren und speichern", key="save_button"):
             if not raw_input.strip():
                 st.warning("Bitte geben Sie zuerst Pick-Codes ein.")
             else:
                 # Split lines and strip whitespaces
                 lines = [line.strip() for line in raw_input.split("\n") if line.strip()]
-                
+
                 # Validate picks
                 errors = []
                 valid_picks = []
@@ -234,7 +236,7 @@ elif navigation == "3. Pick-Batches":
                         valid_picks.append(p)
                     except ValueError as e:
                         errors.append((idx + 1, code, str(e)))
-                
+
                 if errors:
                     st.error(f"Validierung fehlgeschlagen! {len(errors)} Fehler gefunden:")
                     for line_num, code, err in errors:
@@ -243,9 +245,9 @@ elif navigation == "3. Pick-Batches":
                     # Load existing batches to generate next ID
                     all_batches = load_all_batches(BATCHES_PATH, warehouse)
                     new_id = generate_next_batch_id(list(all_batches.keys()))
-                    
+
                     now_str = datetime.now().isoformat()
-                    
+
                     new_order = PickOrder(
                         order_id=new_id,
                         timestamp_str=now_str,
@@ -253,11 +255,11 @@ elif navigation == "3. Pick-Batches":
                         warehouse=warehouse,
                         source="manual"
                     )
-                    
+
                     try:
                         save_batch(BATCHES_PATH, new_order)
                         st.success(f"Batch {new_id} erfolgreich validiert und unter '{new_id}' gespeichert!")
-                        
+
                         # Summary Metrics
                         st.markdown("### 📊 Batch-Zusammenfassung (Datenqualität)")
                         col1, col2, col3 = st.columns(3)
@@ -270,14 +272,14 @@ elif navigation == "3. Pick-Batches":
                         with col3:
                             st.metric("Verschiedene Stellplatzseiten", len(set(p.side for p in valid_picks)))
                             st.metric("Fehler", "0")
-                            
+
                     except Exception as e:
                         st.error(f"Fehler beim Speichern der Batch: {e}")
-                        
+
     with tab2:
         st.subheader("Bestehende Pick-Batches")
         all_batches = load_all_batches(BATCHES_PATH, warehouse)
-        
+
         if not all_batches:
             st.info("Keine gespeicherten Batches in der Datenbank gefunden.")
         else:
@@ -293,10 +295,10 @@ elif navigation == "3. Pick-Batches":
                     "Letzter Pick": b.last_input_pick.raw_code if b.last_input_pick else "-",
                     "Quelle": "Manuell" if b.source == "manual" else "Historischer Testauftrag"
                 })
-            
+
             df_records = pd.DataFrame(records)
             st.dataframe(df_records, use_container_width=True, hide_index=True)
-            
+
             # Select batch for detail view / actions
             st.markdown("---")
             selected_id = st.selectbox(
@@ -304,10 +306,10 @@ elif navigation == "3. Pick-Batches":
                 options=list(all_batches.keys()),
                 key="history_selectbox"
             )
-            
+
             if selected_id:
                 selected_batch = all_batches[selected_id]
-                
+
                 c1, c2 = st.columns(2)
                 with c1:
                     st.write(f"**Batch-ID:** `{selected_batch.order_id}`")
@@ -317,7 +319,7 @@ elif navigation == "3. Pick-Batches":
                     st.write(f"**Quelle:** {selected_batch.source}")
                     st.write(f"**Erster Pick:** `{selected_batch.first_pick.raw_code if selected_batch.first_pick else '-'}`")
                     st.write(f"**Letzter Pick:** `{selected_batch.last_input_pick.raw_code if selected_batch.last_input_pick else '-'}`")
-                
+
                 # Detailed list of picks
                 df_picks_detail = []
                 for idx, p in enumerate(selected_batch.picks):
@@ -332,12 +334,12 @@ elif navigation == "3. Pick-Batches":
                         "Koord Y": round(p.y, 3)
                     })
                 st.dataframe(pd.DataFrame(df_picks_detail), use_container_width=True, hide_index=True)
-                
+
                 # Redirect to map button
                 if st.button("Auf Karte anzeigen 🗺️", key=f"show_map_{selected_id}"):
                     st.session_state["selected_batch_id"] = selected_id
                     st.success("Batch geladen! Wechseln Sie zur '4. Lagerkarte', um sie anzuzeigen.")
-                
+
                 # Delete batch section
                 st.markdown("#### Gefahrenbereich")
                 confirm_del = st.checkbox(
@@ -357,27 +359,27 @@ elif navigation == "3. Pick-Batches":
 elif navigation == "4. Lagerkarte":
     st.markdown("<h1 class='main-header'>Interaktive Lagerkarte</h1>", unsafe_allow_html=True)
     st.markdown("<p class='sub-header'>Geben Sie Pick-Codes ein oder laden Sie eine gespeicherte Batch, um die Route anzuzeigen</p>", unsafe_allow_html=True)
-    
+
     # Load all batches for dropdown selection
     all_batches = load_all_batches(BATCHES_PATH, warehouse)
-    
+
     # Check if a batch was passed via session state
     selected_batch_id_default = st.session_state.get("selected_batch_id", "-- Manuelle Eingabe --")
     if selected_batch_id_default != "-- Manuelle Eingabe --" and selected_batch_id_default not in all_batches:
         selected_batch_id_default = "-- Manuelle Eingabe --"
-        
+
     dropdown_options = ["-- Manuelle Eingabe --"] + list(all_batches.keys())
     default_idx = dropdown_options.index(selected_batch_id_default)
-    
+
     loaded_batch_id = st.selectbox(
         "Gespeicherte Batch laden",
         options=dropdown_options,
         index=default_idx,
         key="map_load_selectbox"
     )
-    
+
     parsed_picks = []
-    
+
     if loaded_batch_id != "-- Manuelle Eingabe --":
         st.info(f"Geladene Batch: **{loaded_batch_id}** ({all_batches[loaded_batch_id].pick_count} Picks, Quelle: {all_batches[loaded_batch_id].source})")
         parsed_picks = all_batches[loaded_batch_id].picks
@@ -393,7 +395,7 @@ elif navigation == "4. Lagerkarte":
             help="Format: XX.YYY.ZZ (z.B. 19.015.20)",
             key="map_pick_input"
         )
-        
+
         # Parse picks
         raw_codes = [code.strip() for code in pick_input.split(";") if code.strip()]
         invalid_picks = []
@@ -402,11 +404,11 @@ elif navigation == "4. Lagerkarte":
                 parsed_picks.append(Pick(code, warehouse))
             except ValueError as e:
                 invalid_picks.append((code, str(e)))
-                
+
         if invalid_picks:
             for code, err in invalid_picks:
                 st.error(f"Ungültiger Pick-Code '{code}': {err}")
-                
+
     if parsed_picks:
         # Routing Options
         route_type = st.radio(
@@ -415,28 +417,28 @@ elif navigation == "4. Lagerkarte":
             horizontal=True,
             key="routing_radio"
         )
-        
+
         # Calculate routes
         if route_type == "Originale Reihenfolge (Unoptimiert)":
             route = get_original_route(parsed_picks)
         else:
             route = get_simple_sorted_route(parsed_picks, warehouse)
-            
+
         # Draw Map
         fig = draw_warehouse_map(warehouse, route)
-        
+
         # Calculate statistics and segments
         metrics = calculate_route_metrics(route, warehouse)
         orig_metrics = calculate_route_metrics(parsed_picks, warehouse)
-        
+
         col1, col2 = st.columns([3, 7])
-        
+
         with col1:
             st.markdown("### Routen-Statistik")
-            
+
             # Displays
             st.metric("Laufweg der Route", f"{metrics.total_distance_m:.2f} m")
-            
+
             if route_type == "Einfache Gassen-Sortierung (S-Shape - PROVISORISCHER TEST – NICHT OPTIMIERT)":
                 savings_dist = orig_metrics.total_distance_m - metrics.total_distance_m
                 savings_pct = (savings_dist / orig_metrics.total_distance_m * 100) if orig_metrics.total_distance_m > 0 else 0
@@ -445,14 +447,14 @@ elif navigation == "4. Lagerkarte":
                     st.success(f"Ersparnis: {savings_dist:.2f} m ({savings_pct:.1f}%)")
                 elif savings_dist < 0:
                     st.warning(f"Sortierte Route ist {-savings_dist:.2f} m länger als die unoptimierte.")
-            
+
             st.markdown("**Weitere Details:**")
             st.write(f"- **Picks:** {metrics.pick_count}")
             st.write(f"- **Gänge besucht:** {metrics.physical_aisles_visited}")
             st.write(f"- **Ø Distanz pro Pick:** {metrics.average_segment_m:.2f} m")
             st.write(f"- **Längstes Segment:** {metrics.longest_segment_m:.2f} m")
             st.write(f"- **Kürzestes Segment:** {metrics.shortest_segment_m:.2f} m")
-                
+
             st.markdown("---")
             st.markdown("### Pick-Reihenfolge")
             df_order = []
@@ -462,13 +464,13 @@ elif navigation == "4. Lagerkarte":
                     "Code": p.raw_code
                 })
             st.dataframe(pd.DataFrame(df_order), use_container_width=True, hide_index=True)
-            
+
         with col2:
             st.plotly_chart(fig, use_container_width=True)
-            
+
         # Draw validation table and segment table under the map/columns
         st.markdown("---")
-        
+
         # Draw Route Segments Table
         st.markdown("### Routen-Tabelle (Segment-Details)")
         df_segments = []
@@ -481,7 +483,7 @@ elif navigation == "4. Lagerkarte":
                 "Distanz": f"{seg.distance_m:.2f} m"
             })
         st.dataframe(pd.DataFrame(df_segments), use_container_width=True, hide_index=True)
-        
+
         st.markdown("---")
         st.markdown("### Validierungs-Informationen (Koordinatenkontrolle)")
         df_picks = []
@@ -503,9 +505,9 @@ elif navigation == "4. Lagerkarte":
 elif navigation == "5. Routenvergleich":
     st.markdown("<h1 class='main-header'>Heuristischer Routenvergleich</h1>", unsafe_allow_html=True)
     st.markdown("<p class='sub-header'>Vergleichen Sie verschiedene Optimierungsheuristiken gegen Ihre geladenen Kommissionieraufträge</p>", unsafe_allow_html=True)
-    
+
     all_batches = load_all_batches(BATCHES_PATH, warehouse)
-    
+
     if not all_batches:
         st.warning("Keine Kommissionieraufträge in der Datenbank gefunden. Bitte erfassen Sie zuerst eine Batch im Reiter '3. Pick-Batches'.")
     else:
@@ -515,17 +517,17 @@ elif navigation == "5. Routenvergleich":
             options=list(all_batches.keys()),
             key="benchmark_batch_selectbox"
         )
-        
+
         batch_order = all_batches[selected_batch_id]
-        
+
         # Trigger benchmark
         results = benchmark_batch(
             batch_order.picks, warehouse, selected_batch_id, persist=False
         )
-        
+
         # Display comparison table
         st.markdown("### 📊 Benchmark-Ergebnisse")
-        
+
         winner_summary = summarize_benchmark_results(results)
         baseline_dist = winner_summary["baseline_distance_with_exit_m"]
 
@@ -541,7 +543,7 @@ elif navigation == "5. Routenvergleich":
                 difference_str = f"{-difference_m:.2f} m länger ({-difference_pct:.1f}%)"
             else:
                 difference_str = "Gleich lang wie Baseline"
-            
+
             df_comp.append({
                 "Methode": r["method_name"],
                 "Pick-Distanz (m)": f"{r['total_distance_m']:.2f} m",
@@ -555,7 +557,7 @@ elif navigation == "5. Routenvergleich":
                 "Wiederholte Gänge": r["repeated_aisle_visit_count"],
                 "Gültig?": "✅ Ja" if r["is_valid"] else "❌ Nein"
             })
-                
+
         st.dataframe(pd.DataFrame(df_comp), use_container_width=True, hide_index=True)
 
         best_method = winner_summary["best_heuristic_method"]
@@ -575,37 +577,37 @@ elif navigation == "5. Routenvergleich":
                 f"inklusive Ausgang. Beste Methode einschließlich Baseline: "
                 f"{winner_summary['best_overall_method']}."
             )
-            
+
         # Select method to visualize
         st.markdown("---")
         st.markdown("### 🗺️ Routen-Visualisierung")
-        
+
         route_options = [r["method_name"] for r in results if r["is_valid"]]
         selected_method = st.selectbox(
             "Wählen Sie eine Heuristik zur Kartenanzeige:",
             options=route_options,
             key="benchmark_show_selectbox"
         )
-        
+
         # Find chosen run
         chosen_run = next(r for r in results if r["method_name"] == selected_method)
-        
+
         # Re-resolve picks from codes for visualizer
         route_picks = [Pick(code, warehouse) for code in chosen_run["route_codes"]]
-        
+
         # Calculate full metrics for visualization
         route_metrics = calculate_route_metrics(route_picks, warehouse)
-        
+
         # Draw Map
         fig = draw_warehouse_map(warehouse, route_picks)
-        
+
         col1, col2 = st.columns([3, 7])
         with col1:
             st.markdown(f"#### Details: {selected_method}")
             st.metric("Pick-Distanz", f"{chosen_run['total_distance_m']:.2f} m")
             st.metric("Weg zum Ausgang", f"{chosen_run['end_distance_to_20_001_m']:.2f} m")
             st.metric("Gesamtdistanz inklusive Ausgang", f"{chosen_run['distance_with_exit_m']:.2f} m")
-            
+
             st.markdown("**Metriken:**")
             st.write(f"- **Picks:** {chosen_run['pick_count']}")
             st.write(f"- **Besuchte Gänge:** {chosen_run['physical_aisles_visited']}")
@@ -616,10 +618,10 @@ elif navigation == "5. Routenvergleich":
             st.write(f"- **Gangwechsel (Via 001/084):** {chosen_run['via_001_count'] + chosen_run['via_084_count']}")
             st.write(f"- **Richtungswechsel:** {chosen_run['direction_changes']}")
             st.write(f"- **Backtracking-Länge:** {chosen_run['estimated_backtracking_distance_m']:.2f} m")
-            
+
             st.markdown("---")
             st.markdown("#### Pick-Reihenfolge")
-            
+
             # Determine aisle directions dynamically
             unique_aisle_ids = sorted(list(set(p.physical_aisle_id for p in route_picks if p.physical_aisle_id is not None)))
             aisle_directions = {}
@@ -634,7 +636,7 @@ elif navigation == "5. Routenvergleich":
                         aisle_directions[a_id] = "DOWN (084 ➔ 001)"
             if 0 in aisle_directions:
                 aisle_directions[0] = "Wagen"
-                
+
             df_seq = []
             for idx, p in enumerate(route_picks):
                 a_id = p.physical_aisle_id if p.physical_aisle_id is not None else 0
@@ -645,7 +647,7 @@ elif navigation == "5. Routenvergleich":
                     "Richtung": aisle_directions.get(a_id, "N/A")
                 })
             st.dataframe(pd.DataFrame(df_seq), use_container_width=True, hide_index=True)
-            
+
         with col2:
             st.plotly_chart(fig, use_container_width=True)
 
@@ -655,13 +657,13 @@ elif navigation == "5. Routenvergleich":
 elif navigation == "6. Benchmark":
     st.markdown("<h1 class='main-header'>Real-Data Benchmarking & Simulation</h1>", unsafe_allow_html=True)
     st.markdown("<p class='sub-header'>Führen Sie vergleichende Benchmarks für Ihre Kommissionieraufträge aus und analysieren Sie aggregierte Statistiken.</p>", unsafe_allow_html=True)
-    
+
     # Load batches
     all_batches = load_all_batches(BATCHES_PATH, warehouse)
-    
+
     # Create tabs
     tab_run, tab_history, tab_sim = st.tabs(["🚀 Benchmark ausführen", "📜 Benchmark-Historie & Profil", "🎲 Simulation / Testdaten"])
-    
+
     with tab_run:
         if not all_batches:
             st.warning("Keine Kommissionieraufträge in der Datenbank gefunden. Bitte erfassen Sie zuerst eine Batch im Reiter '3. Pick-Batches'.")
@@ -671,9 +673,9 @@ elif navigation == "6. Benchmark":
                 options=list(all_batches.keys()),
                 key="run_benchmark_batch_selectbox"
             )
-            
+
             selected_batch = all_batches[selected_batch_id]
-            
+
             # Show batch profile / quality metrics
             st.markdown("### 🔍 Auftragsprofil & Datenqualität")
             c1, c2, c3, c4 = st.columns(4)
@@ -687,18 +689,18 @@ elif navigation == "6. Benchmark":
                 min_r = min(p.row for p in selected_batch.picks) if selected_batch.picks else 0
                 max_r = max(p.row for p in selected_batch.picks) if selected_batch.picks else 0
                 st.metric("Reihenbereich", f"{min_r:03d} - {max_r:03d}")
-                
+
             # Density bar chart
             st.markdown("**Pick-Dichte pro physischem Gang:**")
             density_data = {}
             for a_id in range(1, 10):
                 density_data[f"Gang {a_id}"] = sum(1 for p in selected_batch.picks if p.physical_aisle_id == a_id)
             st.bar_chart(pd.DataFrame(list(density_data.items()), columns=["Physischer Gang", "Picks"]).set_index("Physischer Gang"))
-            
+
             if st.button("Benchmark ausführen", key="run_benchmark_button"):
                 with st.spinner("Berechne Routen für alle 6 Optimierungsansätze..."):
                     results = benchmark_batch(selected_batch.picks, warehouse, selected_batch_id, selected_batch.source)
-                    
+
                     winner_summary = summarize_benchmark_results(results)
                     baseline_dist = winner_summary["baseline_distance_with_exit_m"]
                     best_dist = winner_summary["best_heuristic_distance_with_exit_m"]
@@ -719,10 +721,10 @@ elif navigation == "6. Benchmark":
                             f"inklusive Ausgang. Beste Methode einschließlich Baseline: "
                             f"{winner_summary['best_overall_method']}."
                         )
-                    
+
                     # Display results sorted by distance ascending
                     sorted_results = sorted(results, key=lambda r: r["distance_with_exit_m"])
-                    
+
                     df_comp = []
                     for r in sorted_results:
                         difference_m = baseline_dist - r["distance_with_exit_m"]
@@ -735,7 +737,7 @@ elif navigation == "6. Benchmark":
                             difference_str = f"{-difference_m:.2f} m länger ({-difference_pct:.1f}%)"
                         else:
                             difference_str = "Gleich lang wie Baseline"
-                        
+
                         df_comp.append({
                             "Methode": r["method_name"],
                             "Pick-Distanz (m)": f"{r['total_distance_m']:.2f} m",
@@ -750,25 +752,25 @@ elif navigation == "6. Benchmark":
                             "Gültig?": "✅ Ja" if r["is_valid"] else "❌ Nein"
                         })
                     st.dataframe(pd.DataFrame(df_comp), use_container_width=True, hide_index=True)
-                    
+
     with tab_history:
         history = load_benchmark_history(BENCHMARK_HISTORY_PATH)
-        
+
         if not history:
             st.info("Noch keine gespeicherten Benchmarks vorhanden. Bitte führen Sie zuerst einen Benchmark aus.")
         else:
             runs = list(history.values())
-            
+
             # Filtering
             filter_source = st.radio("Historie filtern nach Quelle:", ["Echte historische Daten", "Synthetische Simulationsdaten", "Alle anzeigen"], horizontal=True, key="history_filter_radio")
-            
+
             if filter_source == "Echte historische Daten":
                 filtered_runs = [r for r in runs if r.get("source", "historical") == "historical"]
             elif filter_source == "Synthetische Simulationsdaten":
                 filtered_runs = [r for r in runs if r.get("source", "historical") == "simulation"]
             else:
                 filtered_runs = runs
-                
+
             if not filtered_runs:
                 st.info("Keine Einträge für diese Filtereinstellung vorhanden.")
             else:
@@ -802,7 +804,7 @@ elif navigation == "6. Benchmark":
                         best_display = "Legacy/ungültig"
                         difference_display = "–"
                         result_display = "Nicht für Gewinner oder Aggregate verwendet"
-                    
+
                     records.append({
                         "Batch-ID": r.get("batch_id", "Unbekannt"),
                         "Picks": r.get("pick_count", "–"),
@@ -816,7 +818,7 @@ elif navigation == "6. Benchmark":
                         "Datum": r.get("timestamp", "Unbekannt")[:16].replace("T", " ")
                     })
                 st.dataframe(pd.DataFrame(records), use_container_width=True, hide_index=True)
-                
+
                 comparable_runs = get_comparable_history_runs(filtered_runs)
                 legacy_count = len(filtered_runs) - len(comparable_runs)
                 if legacy_count:
@@ -867,9 +869,9 @@ elif navigation == "6. Benchmark":
                             backtrackings_base.append(baseline_backtracking)
                         if is_valid_objective_value(heuristic_backtracking):
                             backtrackings_best.append(heuristic_backtracking)
-                        
+
                     import statistics
-                    
+
                     c1, c2, c3 = st.columns(3)
                     with c1:
                         st.metric("Ø Baseline – Distanz inklusive Ausgang", f"{statistics.mean(baselines):.2f} m")
@@ -884,7 +886,7 @@ elif navigation == "6. Benchmark":
                     st.caption("Positive Differenzwerte bedeuten eine Verbesserung gegenüber der Baseline.")
                     if improvement_count == 0:
                         st.warning("Keine getestete Heuristik verbessert die Baseline.")
-                        
+
                     # Backtracking metrics
                     st.markdown("#### Backtracking-Vergleich")
                     c_bt1, c_bt2 = st.columns(2)
@@ -896,24 +898,24 @@ elif navigation == "6. Benchmark":
                         if backtrackings_best:
                             st.metric("Ø Backtracking (Beste Heuristik)", f"{statistics.mean(backtrackings_best):.2f} m")
                             st.metric("Median Backtracking (Beste Heuristik)", f"{statistics.median(backtrackings_best):.2f} m")
-                        
+
                     # Method success counts
                     st.markdown("### Beste getestete Heuristik nach Distanz inklusive Ausgang")
                     best_counts = {}
                     for method in best_methods:
                         best_counts[method] = best_counts.get(method, 0) + 1
-                        
+
                     df_counts = pd.DataFrame(list(best_counts.items()), columns=["Optimierungsmethode", "Häufigkeit"]).set_index("Optimierungsmethode")
                     st.bar_chart(df_counts)
                     for m, cnt in sorted(best_counts.items(), key=lambda x: x[1], reverse=True):
                         st.write(f"- **{m}:** {cnt} mal kürzeste getestete Heuristik")
-                        
+
     with tab_sim:
         st.subheader("🎲 Synthetische Picklisten generieren")
         st.write("Generieren Sie zufällige, logistisch valide Testdaten, um die Heuristiken unter verschiedenen Verteilungsszenarien zu vergleichen.")
-        
+
         num_sim_picks = st.slider("Anzahl Picks in der Simulation", min_value=5, max_value=100, value=30, step=5)
-        
+
         # Select aisles to include
         selected_aisles = st.multiselect(
             "Physische Gänge für Simulation auswählen (leer lassen für alle):",
@@ -921,39 +923,39 @@ elif navigation == "6. Benchmark":
             default=list(range(1, 10)),
             format_func=lambda x: f"Gang {x} (Seiten {x*2:02d}/{x*2+1:02d})" if x < 9 else f"Gang 9 (Seite 20)"
         )
-        
+
         include_cart = st.checkbox("Wagen-Picks (01-03) erlauben?", value=True)
-        
+
         if st.button("Synthetische Batch erzeugen & speichern", key="generate_sim_batch_button"):
             import random
-            
+
             # Map physical aisles to available sides
             aisle_sides = {}
             for a in range(1, 9):
                 aisle_sides[a] = [a*2, a*2+1]
             aisle_sides[9] = [20]
-            
+
             cart_sides = [1, 2, 3]
-            
+
             allowed_sides = []
             aisles_to_use = selected_aisles if selected_aisles else list(range(1, 10))
             for a in aisles_to_use:
                 allowed_sides.extend(aisle_sides[a])
-                
+
             if include_cart:
                 allowed_sides.extend(cart_sides)
-                
+
             sim_codes = []
             for _ in range(num_sim_picks):
                 side = random.choice(allowed_sides)
                 row = random.randint(1, 84)
                 box = random.randint(10, 90)
                 sim_codes.append(f"{side:02d}.{row:03d}.{box:02d}")
-                
+
             # Save synthetic batch
             new_sim_id = generate_next_batch_id(list(all_batches.keys()))
             new_sim_id = new_sim_id.replace("BATCH-", "SIM-")
-            
+
             new_order = PickOrder(
                 order_id=new_sim_id,
                 timestamp_str=datetime.now().isoformat(),
@@ -961,7 +963,7 @@ elif navigation == "6. Benchmark":
                 warehouse=warehouse,
                 source="simulation"
             )
-            
+
             try:
                 save_batch(BATCHES_PATH, new_order)
                 st.success(f"Synthetische Simulationsbatch **{new_sim_id}** mit {num_sim_picks} Picks erfolgreich erzeugt und gespeichert!")
@@ -977,8 +979,39 @@ elif navigation == "6. Benchmark":
 elif navigation == "7. Einstellungen":
     st.markdown("<h1 class='main-header'>Einstellungen</h1>", unsafe_allow_html=True)
     st.markdown("<p class='sub-header'>System- und Simulationsparameter konfigurieren</p>", unsafe_allow_html=True)
-    
+
     st.subheader("Picker Parameter (Simulation)")
     st.slider("Picker-Geschwindigkeit (m/s)", min_value=0.5, max_value=2.0, value=1.0, step=0.1)
     st.number_input("Sekunden pro Pick-Vorgang (Sek.)", min_value=1, max_value=60, value=15)
     st.button("Einstellungen Speichern")
+
+    st.markdown("---")
+    st.subheader("Pick-Batches sichern")
+    st.info("Diese Datei enthält eine unveränderte Kopie des aktuell gelesenen Pick-Batch-Bestands. Bewahre die heruntergeladene Datei außerhalb der App auf. Die Sicherung prüft den Inhalt nicht und ersetzt keine dauerhaft gespeicherte Datenbank.")
+
+    try:
+        backup_bytes = read_batch_backup(BATCHES_PATH)
+        if len(backup_bytes) == 0:
+            st.warning("Die Quelldatei ist leer.")
+
+        file_size = len(backup_bytes)
+        sha256_hash = hashlib.sha256(backup_bytes).hexdigest()
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        st.write(f"**Dateigröße:** {file_size} Bytes")
+        st.write(f"**SHA-256:** `{sha256_hash}`")
+        st.write(f"**Bereitgestellt am:** {timestamp}")
+        st.caption("Hinweis: Dies ist eine unveränderte Rohkopie. Ein angebotener Download bestätigt noch nicht die erfolgreiche Speicherung durch den Browser.")
+
+        dl_name = f"pick_batches_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        st.download_button(
+            label="Pick-Batch-Datei herunterladen",
+            data=backup_bytes,
+            file_name=dl_name,
+            mime="application/json",
+            key="download_batches_backup"
+        )
+    except FileNotFoundError:
+        st.error("Die Pick-Batch-Quelldatei wurde nicht gefunden.")
+    except Exception as e:
+        st.error(f"Fehler beim Lesen der Pick-Batch-Datei: {e}")
