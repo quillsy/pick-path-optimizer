@@ -171,6 +171,12 @@ class TestValidation(unittest.TestCase):
         with self.assertRaises(ValueError):
             SectionGeometry(shelf_length_m=math.nan, shelves_per_section=7, cross_aisle_width_m=1.43)
 
+    def test_shelf_length_bool_raises(self):
+        for val in (True, False):
+            with self.subTest(shelf_length_m=val):
+                with self.assertRaises(TypeError):
+                    SectionGeometry(shelf_length_m=val, shelves_per_section=7, cross_aisle_width_m=1.43)
+
     # --- shelves_per_section ---
 
     def test_shelves_zero_raises(self):
@@ -212,6 +218,12 @@ class TestValidation(unittest.TestCase):
         with self.assertRaises(ValueError):
             SectionGeometry(shelf_length_m=1.30, shelves_per_section=7, cross_aisle_width_m=math.nan)
 
+    def test_cross_aisle_bool_raises(self):
+        for val in (True, False):
+            with self.subTest(cross_aisle_width_m=val):
+                with self.assertRaises(TypeError):
+                    SectionGeometry(shelf_length_m=1.30, shelves_per_section=7, cross_aisle_width_m=val)
+
     # --- overflow guard ---
 
     def test_section_length_overflow_raises(self):
@@ -234,6 +246,31 @@ class TestValidation(unittest.TestCase):
         # The guard must reject this at construction time.
         with self.assertRaises(ValueError):
             SectionGeometry(shelf_length_m=5e307, shelves_per_section=1, cross_aisle_width_m=1e308)
+
+
+class TestImmutability(unittest.TestCase):
+    """SectionGeometry must be immutable."""
+
+    def test_frozen_instance(self):
+        import dataclasses
+        geom = SectionGeometry(shelf_length_m=1.30, shelves_per_section=7, cross_aisle_width_m=1.43)
+
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            geom.shelf_length_m = 2.0
+
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            geom.shelves_per_section = 10
+
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            geom.cross_aisle_width_m = 2.0
+
+        with self.assertRaises(AttributeError):
+            geom.total_length_m = 20.0
+
+        self.assertEqual(geom.shelf_length_m, 1.30)
+        self.assertEqual(geom.shelves_per_section, 7)
+        self.assertEqual(geom.cross_aisle_width_m, 1.43)
+        self.assertAlmostEqual(geom.total_length_m, 19.63, delta=TOLERANCE)
 
 
 if __name__ == "__main__":
