@@ -33,10 +33,41 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Record data hashes before tests
+        id: data_snapshot
         run: |
-          mkdir -p /tmp/test-runner
-          # Capture all files under data/ and compute SHA-256
-          find data -type f | sort | xargs shasum -a 256 > /tmp/test-runner/before_hashes.txt
+          python3 -c "
+          import os, sys, json, hashlib
+          def generate_manifest(directory):
+              if not os.path.exists(directory):
+                  print(f'Error: Directory {directory} does not exist.')
+                  sys.exit(1)
+              manifest = {}
+              def on_error(err):
+                  print(f'Error accessing directory: {err}')
+                  sys.exit(1)
+              for root, dirs, files in os.walk(directory, onerror=on_error):
+                  for f in files:
+                      path = os.path.join(root, f)
+                      if os.path.islink(path):
+                          print(f'Error: Symbolic link found at {path}, explicitly rejected.')
+                          sys.exit(1)
+                      if not os.path.isfile(path): continue
+                      try:
+                          with open(path, 'rb') as f_obj:
+                              h = hashlib.sha256()
+                              while chunk := f_obj.read(8192):
+                                  h.update(chunk)
+                              manifest[path] = h.hexdigest()
+                      except Exception as e:
+                          print(f'Error reading file {path}: {e}')
+                          sys.exit(1)
+              return manifest
+          manifest = generate_manifest('data')
+          output_path = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 'before_hashes.json')
+          with open(output_path, 'w', encoding='utf-8') as out:
+              json.dump(manifest, out, indent=2, sort_keys=True)
+          print('Manifest generated successfully.')
+          "
 
       - name: Run tests
         run: |
@@ -51,14 +82,45 @@ jobs:
           fi
 
       - name: Verify data integrity
-        if: always()
+        if: ${{ always() && steps.data_snapshot.outcome == 'success' }}
         run: |
-          if [ -f /tmp/test-runner/before_hashes.txt ]; then
-            find data -type f 2>/dev/null | sort | xargs shasum -a 256 > /tmp/test-runner/after_hashes.txt || true
-            if ! diff -u /tmp/test-runner/before_hashes.txt /tmp/test-runner/after_hashes.txt; then
-              echo "Error: Data files under data/ were added, removed, or modified during tests. This is a check of the end state, not all intermittent writes."
-              exit 1
-            else
-              echo "Data integrity verified: end state matches initial state."
-            fi
-          fi
+          python3 -c "
+          import os, sys, json, hashlib
+          def generate_manifest(directory):
+              if not os.path.exists(directory):
+                  print(f'Error: Directory {directory} does not exist.')
+                  sys.exit(1)
+              manifest = {}
+              def on_error(err):
+                  print(f'Error accessing directory: {err}')
+                  sys.exit(1)
+              for root, dirs, files in os.walk(directory, onerror=on_error):
+                  for f in files:
+                      path = os.path.join(root, f)
+                      if os.path.islink(path):
+                          print(f'Error: Symbolic link found at {path}')
+                          sys.exit(1)
+                      if not os.path.isfile(path): continue
+                      try:
+                          with open(path, 'rb') as f_obj:
+                              h = hashlib.sha256()
+                              while chunk := f_obj.read(8192):
+                                  h.update(chunk)
+                              manifest[path] = h.hexdigest()
+                      except Exception as e:
+                          print(f'Error reading file {path}: {e}')
+                          sys.exit(1)
+              return manifest
+          before_path = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 'before_hashes.json')
+          if not os.path.exists(before_path):
+              print('Error: before_hashes.json missing')
+              sys.exit(1)
+          with open(before_path, 'r', encoding='utf-8') as f:
+              before_manifest = json.load(f)
+          after_manifest = generate_manifest('data')
+          if before_manifest != after_manifest:
+              print('Error: Data files under data/ were added, removed, or modified during tests.')
+              sys.exit(1)
+          else:
+              print('Data integrity verified: end state matches initial state.')
+          "
