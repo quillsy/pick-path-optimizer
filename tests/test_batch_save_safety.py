@@ -92,33 +92,54 @@ class TestBatchSaveSafety(unittest.TestCase):
                 files = os.listdir(self.test_dir)
                 self.assertEqual(len(files), 1)
 
-    @patch('modules.picks.json.dump')
+    @patch("modules.picks.json.dump")
     def test_write_failure(self, mock_dump):
         initial_content = b'{"OLD": {}}'
-        with open(self.file_path, "wb") as f:
-            f.write(initial_content)
+        with open(self.file_path, "wb") as original:
+            original.write(initial_content)
+
+        simulated_error = OSError("Simulated write error")
+        partial_bytes = b'{ "partial_json": '
+        observed_paths = []
 
         def dump_side_effect(data, f_obj, **kwargs):
-            f_obj.write('{ "partial_json": ')
+            tmp_path = os.path.abspath(os.fspath(f_obj.name))
+            target_path = os.path.abspath(self.file_path)
+
+            self.assertNotEqual(tmp_path, target_path)
+            self.assertEqual(
+                os.path.dirname(tmp_path), os.path.dirname(target_path)
+            )
+            observed_paths.append(tmp_path)
+
+            f_obj.write(partial_bytes.decode("utf-8"))
             f_obj.flush()
-            raise OSError("Simulated write error")
+
+            with open(tmp_path, "rb") as partial_file:
+                self.assertEqual(partial_file.read(), partial_bytes)
+
+            with open(self.file_path, "rb") as original:
+                self.assertEqual(original.read(), initial_content)
+
+            raise simulated_error
 
         mock_dump.side_effect = dump_side_effect
 
-        with patch('os.replace') as mock_replace:
-            with self.assertRaises(OSError) as ctx:
+        with patch("modules.picks.os.replace") as mock_replace:
+            with self.assertRaises(OSError) as caught:
                 save_batch(self.file_path, self.order)
-            self.assertEqual(str(ctx.exception), "Simulated write error")
+
+            self.assertIs(caught.exception, simulated_error)
             mock_replace.assert_not_called()
 
-        self.assertTrue(mock_dump.called)
+        mock_dump.assert_called_once()
+        self.assertEqual(len(observed_paths), 1)
+        self.assertFalse(os.path.exists(observed_paths[0]))
 
-        with open(self.file_path, "rb") as f:
-            self.assertEqual(f.read(), initial_content)
+        with open(self.file_path, "rb") as original:
+            self.assertEqual(original.read(), initial_content)
 
-        files = os.listdir(self.test_dir)
-        self.assertEqual(len(files), 1)
-        self.assertEqual(files[0], "test_batches.json")
+        self.assertEqual(os.listdir(self.test_dir), ["test_batches.json"])
 
     def test_replace_failure(self):
         initial_content = b'{"OLD": {}}'
