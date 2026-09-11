@@ -12,13 +12,14 @@ Die nachfolgende Tabelle gibt einen kurzen Überblick über die wichtigsten vorh
 
 | Komponente | Datei(en) | Aufgabe |
 |---|---|---|
-| Warehouse-Modell | `modules/warehouse.py` | Datenhaltung für Lagerkonfiguration und physische Gänge |
+| Warehouse-Modell | `modules/warehouse.py` | Datenhaltung für Lagerkonfiguration und physische Gänge, sowie Ableitung der Pickkoordinaten durch `Warehouse.get_coordinates()` |
 | Neuer Abschnittsbaustein | `modules/section_geometry.py` | Basisberechnungen und Validierung der Regalgeometrie |
-| Pick-Parsing und Speicherung | `modules/picks.py` | Interpretation und Speicherung der Pickkoordinaten/Reihen |
+| Pick-Parsing und Speicherung | `modules/picks.py` | Zerlegt und validiert Pickcodes, ordnet Picks mithilfe des Warehouse-Modells räumlich zu und speichert bzw. lädt Batches. `save_batch()` speichert die Pickcodes in ihrer Reihenfolge und Batch-Metadaten. Es speichert keine eigene vollständige Koordinatentabelle. |
 | Distanzberechnung | `modules/routing.py` | Logik zur Ermittlung der kürzesten Laufwege zwischen Picks |
-| Optimierer | `modules/optimization.py` | Algorithmen (z.B. TSP/Brute-Force) zur Routenverbesserung |
+| Optimierer | `modules/optimization.py` | `BaselineOptimizer`: unveränderte Eingabereihenfolge. `GroupedAisleOptimizer`, `GreedyNearestOptimizer`, `EndAwareOptimizer`: vorhandene Heuristiken. `PhysicalAisleDistanceOptimizer` und `PhysicalAisleOperationalOptimizer`: Varianten einer Richtungsenumeration bei vorgegebener Gangreihenfolge. **Die Enumeration untersucht Richtungsentscheidungen innerhalb des implementierten Suchraums, nicht sämtliche möglichen Gang- und Pickreihenfolgen. Sie ist kein allgemeiner TSP-Solver und kein Nachweis eines globalen Optimums.** |
 | Benchmark | `modules/optimizer_benchmark.py` | Ausführung und Vergleich von Optimierungsläufen |
-| Visualisierung und UI | `app.py` | Streamlit-Weboberfläche zur Routendarstellung |
+| Visualisierung | `visualization/warehouse_map.py` | Plotly-Lagerkarte und Darstellung der Wegpunkte |
+| Streamlit-Oberfläche | `app.py` | Streamlit-Oberfläche und Aufruf der jeweiligen Funktionen |
 | Testworkflow | `.github/workflows/python-tests.yml` | Automatisierte Testpipeline via GitHub Actions |
 
 ## C. Was erreicht wurde
@@ -28,8 +29,17 @@ Die nachfolgende Tabelle gibt einen kurzen Überblick über die wichtigsten vorh
 - **Datenkontrolle:** Die GitHub-Pipeline vergleicht verlässlich den Dateiendzustand von `data/`, sie überwacht jedoch nicht sämtliche zwischenzeitlichen Schreibzugriffe.
 
 ## D. Wichtigster offener Fehler
-Die aktuelle Distanzberechnung (`calculate_distance_with_type` in `modules/routing.py`) berechnet fehlerhafte Laufstrecken:
-Sie verwendet fälschlicherweise die bloße Regallänge multipliziert mit der fortlaufenden Reihennummer (z. B. 42 × 1.30m) als y-Position. Dies führt zu einer angenommenen Abschnittslänge von `54.60 m`, während die korrekte, bestätigte Länge lediglich `9.10 m` beträgt (siehe `docs/section_geometry.md`).
+Drei betroffene Stellen berechnen fehlerhafte Laufstrecken:
+
+1. **`Warehouse.get_coordinates()` in `modules/warehouse.py`:** Berechnet Pickkoordinaten. Für den ersten Abschnitt wird derzeit beispielsweise `(row - 0.5) * shelf_length_m` verwendet. Damit wird die Regallänge fälschlich als Schrittweite je Reihennummer behandelt.
+2. **`calculate_distance_with_type()` in `modules/routing.py`:** Verwendet diese Pickkoordinaten und berechnet zusätzlich die Übergangspositionen aus derselben falschen Abschnittslänge.
+3. **`generate_detailed_path_points()` und `draw_warehouse_map()` in `visualization/warehouse_map.py`:** Berechnen Wegübergänge beziehungsweise Regalabschnittsgrenzen ebenfalls mit dieser Längenannahme.
+
+Gegenüberstellung:
+- bisherige Annahme: 42 × 1,30 m = 54,60 m je Abschnitt
+- bestätigte Messung: 7 × 1,30 m = 9,10 m je Abschnitt
+
+Eine spätere Reparatur muss diese zusammengehörenden Berechnungen konsistent umstellen. Ein isolierter Austausch einer Formel genügt nicht. Verweise für die bestätigten Maße auf `docs/section_geometry.md`.
 
 **Dabei ist zwingend zu beachten:**
 - **19,63 m** beschreibt die Gesamtlänge beider Regalabschnitte einschließlich Mittelgang, aber **keine** vollständige Pickroute.

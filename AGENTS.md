@@ -10,7 +10,7 @@ Diese Vorgaben gelten dauerhaft für alle Arbeiten am Projekt "Pick Path Optimiz
 - **Problem-Meldungen:** Findest du ein fachliches Problem außerhalb des expliziten Auftragsrahmens, nimm keine ungefragten Reparaturen vor, sondern melde den Befund übersichtlich im Abschlussbericht.
 
 ## 2. Daten und Routen
-- **Originaltreue:** Die originale Batch-Reihenfolge, die Pick-Anzahl sowie eventuelle Duplikate in den Daten müssen stets strikt erhalten bleiben.
+- **Originaltreue:** Die gespeicherten Original-Batches einschließlich ihrer Eingabereihenfolge bleiben unverändert. Bei beauftragter Optimierung darf eine separate Ergebnisliste umgeordnet werden. Dabei bleiben Pickcodes, Pick-Anzahl und Duplikathäufigkeiten erhalten; der erste Pick bleibt entsprechend der bestehenden Startregel an erster Stelle. Optimierungsergebnisse dürfen die Rohdaten nicht überschreiben.
 - **Kapselung:** Halte Datenimporte und die Logik des Routings stets sauber voneinander getrennt.
 - **Datenschutz für `data/`:** Überschreibe, lösche oder erzeuge Dateien im Ordner `data/` unter keinen Umständen neu, es sei denn, ein ausdrücklicher Auftrag erfordert es.
 - **Sicheres Testen:** Führe Experimente und Modultests mit temporären Datensätzen oder ausdrücklich nicht-persistierenden Aufrufen in isolierten Testumgebungen durch.
