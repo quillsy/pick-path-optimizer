@@ -38,14 +38,22 @@ jobs:
           python3 -c "
           import os, sys, json, hashlib
           def generate_manifest(directory):
-              if not os.path.exists(directory):
-                  print(f'Error: Directory {directory} does not exist.')
+              if os.path.islink(directory):
+                  print(f'Error: Data root {directory} is a symbolic link.')
+                  sys.exit(1)
+              if not os.path.isdir(directory):
+                  print(f'Error: Data directory {directory} is missing or not a directory.')
                   sys.exit(1)
               manifest = {}
               def on_error(err):
                   print(f'Error accessing directory: {err}')
                   sys.exit(1)
-              for root, dirs, files in os.walk(directory, onerror=on_error):
+              for root, dirs, files in os.walk(directory, onerror=on_error, followlinks=False):
+                  for name in dirs:
+                      path = os.path.join(root, name)
+                      if os.path.islink(path):
+                          print(f'Error: Symbolic directory link found at {path}.')
+                          sys.exit(1)
                   for f in files:
                       path = os.path.join(root, f)
                       if os.path.islink(path):
@@ -87,18 +95,26 @@ jobs:
           python3 -c "
           import os, sys, json, hashlib
           def generate_manifest(directory):
-              if not os.path.exists(directory):
-                  print(f'Error: Directory {directory} does not exist.')
+              if os.path.islink(directory):
+                  print(f'Error: Data root {directory} is a symbolic link.')
+                  sys.exit(1)
+              if not os.path.isdir(directory):
+                  print(f'Error: Data directory {directory} is missing or not a directory.')
                   sys.exit(1)
               manifest = {}
               def on_error(err):
                   print(f'Error accessing directory: {err}')
                   sys.exit(1)
-              for root, dirs, files in os.walk(directory, onerror=on_error):
+              for root, dirs, files in os.walk(directory, onerror=on_error, followlinks=False):
+                  for name in dirs:
+                      path = os.path.join(root, name)
+                      if os.path.islink(path):
+                          print(f'Error: Symbolic directory link found at {path}.')
+                          sys.exit(1)
                   for f in files:
                       path = os.path.join(root, f)
                       if os.path.islink(path):
-                          print(f'Error: Symbolic link found at {path}')
+                          print(f'Error: Symbolic link found at {path}, explicitly rejected.')
                           sys.exit(1)
                       if not os.path.isfile(path): continue
                       try:
