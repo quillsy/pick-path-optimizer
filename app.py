@@ -987,7 +987,7 @@ elif navigation == "7. Einstellungen":
 
     st.markdown("---")
     st.subheader("Pick-Batches sichern")
-    st.info("Diese Datei enthält eine unveränderte Kopie des aktuell gelesenen Pick-Batch-Bestands. Bewahre die heruntergeladene Datei außerhalb der App auf. Die Sicherung prüft den Inhalt nicht und ersetzt keine dauerhaft gespeicherte Datenbank.")
+    st.info("Diese Datei enthält eine unveränderte Kopie des aktuell gelesenen Pick-Batch-Bestands. Bewahre die heruntergeladene Datei außerhalb der App auf. Die Sicherung prüft den Inhalt nicht und ersetzt keine dauerhaft gespeicherte Datenbank. Gesichert wird ausschließlich die Pick-Batch-Datei, nicht die Lagerkonfiguration, die Benchmark-Historie oder der Projektcode.")
 
     try:
         backup_bytes = read_batch_backup(BATCHES_PATH)
@@ -1013,5 +1013,9 @@ elif navigation == "7. Einstellungen":
         )
     except FileNotFoundError:
         st.error("Die Pick-Batch-Quelldatei wurde nicht gefunden.")
-    except Exception as e:
-        st.error(f"Fehler beim Lesen der Pick-Batch-Datei: {e}")
+    except Exception:
+        st.error(
+            "Die Sicherung konnte nicht bereitgestellt werden. "
+            "Bitte prüfe die Quelldatei und ihre Leseberechtigung "
+            "und versuche es erneut."
+        )

@@ -14,17 +14,27 @@ class TestBatchBackup(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_valid_json_exact_bytes(self):
-        content = b'{\n  "test": 123,\r\n  "unicode": "\xe2\x9c\x93"\n}'
-        with open(self.file_path, "wb") as f:
-            f.write(content)
+        content = (
+            '{\r\n'
+            '  "BATCH-TEST": {\n'
+            '    "order_id": "BATCH-TEST",\r\n'
+            '    "picks": ["20.080.30", "04.002.10", "20.080.30"],\n'
+            '    "custom_meta": {"note": "Prüfung ✓", "values": [2, 1]}\n'
+            '  }\r\n'
+            '}\n'
+        ).encode("utf-8")
+
+        with open(self.file_path, "wb") as source:
+            source.write(content)
 
         result = read_batch_backup(self.file_path)
-        self.assertEqual(result, content)
 
-        # Verify no other files were created and original is untouched
+        self.assertIsInstance(result, bytes)
+        self.assertEqual(result, content)
         self.assertEqual(os.listdir(self.test_dir), ["test_batches.json"])
-        with open(self.file_path, "rb") as f:
-            self.assertEqual(f.read(), content)
+
+        with open(self.file_path, "rb") as source:
+            self.assertEqual(source.read(), content)
 
     def test_corrupted_json_exact_bytes(self):
         content = b'{ bad json '
