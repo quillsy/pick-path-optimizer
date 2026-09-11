@@ -1,6 +1,7 @@
 import re
 import json
 import os
+import uuid
 from typing import List, Tuple, Optional, Dict
 from datetime import datetime
 from modules.warehouse import Warehouse
@@ -20,7 +21,7 @@ class Pick:
         self.x: float = 0.0
         self.y: float = 0.0
         self.physical_aisle_id: Optional[int] = None
-        
+
         self.parse_code()
         if warehouse:
             self.resolve_coordinates(warehouse)
@@ -29,9 +30,9 @@ class Pick:
         match = self.PATTERN.match(self.raw_code)
         if not match:
             raise ValueError(f"Ungültiges Pick-Code-Format: '{self.raw_code}'. Erwartetes Format: XX.YYY.ZZ (z.B. 19.015.20)")
-        
+
         self.side_str, self.row_str, self.box_str = match.groups()
-        
+
         try:
             self.side = int(self.side_str)
             self.row = int(self.row_str)
@@ -41,14 +42,14 @@ class Pick:
 
         if not (1 <= self.side <= 20):
             raise ValueError(f"Ungültige Stellplatzseite: '{self.side_str}'. Erlaubt sind 01 bis 20.")
-            
+
         if not (1 <= self.row <= 84):
             raise ValueError(f"Ungültige Reihe: '{self.row_str}'. Erlaubt sind 001 bis 084.")
 
     def resolve_coordinates(self, warehouse: Warehouse) -> None:
         """Looks up coordinates and physical aisle ID in the warehouse."""
         self.x, self.y = warehouse.get_coordinates(self.side, self.row)
-        
+
         # Get physical aisle mapping
         aisle = warehouse.get_aisle_by_side(self.side)
         if aisle:
@@ -66,24 +67,24 @@ class PickOrder:
         self.order_id = order_id
         self.source = source
         self.created_at = timestamp_str
-        
+
         # Parse timestamp safely
         try:
             self.timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
         except ValueError:
             self.timestamp = datetime.now()
-            
+
         self.picks: List[Pick] = []
         for code in raw_picks_list:
             if code.strip():
                 # We expect parsed/validated codes.
                 # If invalid, it will propagate the ValueError.
                 self.picks.append(Pick(code, warehouse))
-                    
+
         self.pick_count = len(self.picks)
         self.first_pick = self.picks[0] if self.picks else None
         self.last_input_pick = self.picks[-1] if self.picks else None
-                    
+
     def __repr__(self) -> str:
         return f"PickOrder({self.order_id}, Picks count: {len(self.picks)}, Source: {self.source})"
 
@@ -97,7 +98,7 @@ def load_all_batches(file_path: str, warehouse: Warehouse) -> Dict[str, PickOrde
             data = json.load(f)
         except json.JSONDecodeError:
             return {}
-            
+
     batches = {}
     for b_id, b_data in data.items():
         try:
@@ -110,31 +111,55 @@ def load_all_batches(file_path: str, warehouse: Warehouse) -> Dict[str, PickOrde
             )
         except Exception as e:
             print(f"Fehler beim Laden von Batch {b_id}: {e}")
-            
+
     return batches
 
 
 def save_batch(file_path: str, order: PickOrder) -> None:
-    """Saves a single pick batch to the local JSON file."""
+    """
+    Saves a single pick batch to the local JSON file.
+
+    - Beschädigte vorhandene Bestände werden nicht überschrieben.
+    - Die Zieldatei wird erst nach vollständigem Schreiben ersetzt.
+    - Diese Änderung löst keine Konflikte zwischen mehreren gleichzeitig schreibenden Prozessen.
+    - Sie ersetzt weder Backups noch eine dauerhaft gespeicherte externe Datenbank.
+    """
     data = {}
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-            except json.JSONDecodeError:
-                pass
-                
+            data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("Die vorhandene JSON-Datei enthält kein Dictionary.")
+
     data[order.order_id] = {
         "order_id": order.order_id,
         "created_at": order.created_at,
         "source": order.source,
         "picks": [p.raw_code for p in order.picks]
     }
-    
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    dir_name = os.path.dirname(file_path)
+    if not dir_name:
+        dir_name = "."
+    else:
+        os.makedirs(dir_name, exist_ok=True)
+
+    base_name = os.path.basename(file_path)
+    tmp_path = os.path.join(dir_name, f"{base_name}.tmp.{uuid.uuid4().hex}")
+
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, file_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        raise
 
 
 def delete_batch(file_path: str, order_id: str) -> bool:
@@ -146,7 +171,7 @@ def delete_batch(file_path: str, order_id: str) -> bool:
             data = json.load(f)
         except json.JSONDecodeError:
             return False
-            
+
     if order_id in data:
         del data[order_id]
         with open(file_path, "w", encoding="utf-8") as f:
