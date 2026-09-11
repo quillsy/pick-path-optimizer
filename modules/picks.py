@@ -147,14 +147,16 @@ def save_batch(file_path: str, order: PickOrder) -> None:
     base_name = os.path.basename(file_path)
     tmp_path = os.path.join(dir_name, f"{base_name}.tmp.{uuid.uuid4().hex}")
 
+    tmp_created = False
     try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
+        with open(tmp_path, "x", encoding="utf-8") as f:
+            tmp_created = True
             json.dump(data, f, indent=2, ensure_ascii=False)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, file_path)
     except Exception:
-        if os.path.exists(tmp_path):
+        if tmp_created and os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)
             except Exception:

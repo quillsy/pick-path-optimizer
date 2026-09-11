@@ -2,7 +2,6 @@ import unittest
 import os
 import json
 import tempfile
-import builtins
 from unittest.mock import patch
 from datetime import datetime
 from modules.picks import save_batch, Pick, PickOrder
@@ -25,7 +24,6 @@ class TestBatchSaveSafety(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_create_new_file(self):
-        # 1. Zieldatei fehlt -> Gültige Batch-Datei wird erstellt
         save_batch(self.file_path, self.order)
         self.assertTrue(os.path.exists(self.file_path))
         with open(self.file_path, "r") as f:
@@ -34,7 +32,6 @@ class TestBatchSaveSafety(unittest.TestCase):
         self.assertEqual(data["TEST-01"]["picks"], ["10.001.01", "10.001.02", "10.001.01"])
 
     def test_append_existing_file(self):
-        # 2. Gültiger Bestand -> Neuer ergänzt, bestehende Metadaten erhalten
         initial_data = {
             "OLD-01": {
                 "order_id": "OLD-01",
@@ -52,7 +49,6 @@ class TestBatchSaveSafety(unittest.TestCase):
         self.assertEqual(data["OLD-01"]["custom_meta"], "keep_me")
 
     def test_duplicate_picks(self):
-        # 3. Auftrag enthält doppelte Pickcodes -> Anzahl, Duplikate und Eingabereihenfolge erhalten
         save_batch(self.file_path, self.order)
         with open(self.file_path, "r") as f:
             data = json.load(f)
@@ -61,55 +57,70 @@ class TestBatchSaveSafety(unittest.TestCase):
         self.assertEqual(picks, ["10.001.01", "10.001.02", "10.001.01"])
 
     def test_corrupted_file(self):
-        # 4. Beschädigte/leere JSON -> Ausnahme, ursprüngliche Bytes bleiben
-        bad_content = b"{ bad json"
-        with open(self.file_path, "wb") as f:
-            f.write(bad_content)
+        cases = [b"{ bad json", b""]
+        for case in cases:
+            with self.subTest(case=case):
+                if os.path.exists(self.file_path):
+                    os.remove(self.file_path)
+                with open(self.file_path, "wb") as f:
+                    f.write(case)
 
-        with self.assertRaises(json.JSONDecodeError):
-            save_batch(self.file_path, self.order)
+                with self.assertRaises(json.JSONDecodeError):
+                    save_batch(self.file_path, self.order)
 
-        with open(self.file_path, "rb") as f:
-            self.assertEqual(f.read(), bad_content)
+                with open(self.file_path, "rb") as f:
+                    self.assertEqual(f.read(), case)
+
+                files = os.listdir(self.test_dir)
+                self.assertEqual(len(files), 1)
 
     def test_invalid_json_type(self):
-        # 5. Liste oder null -> Ausnahme, ursprüngliche Bytes bleiben
-        content = b"[1, 2, 3]"
-        with open(self.file_path, "wb") as f:
-            f.write(content)
+        cases = [b"[1, 2, 3]", b"null"]
+        for case in cases:
+            with self.subTest(case=case):
+                if os.path.exists(self.file_path):
+                    os.remove(self.file_path)
+                with open(self.file_path, "wb") as f:
+                    f.write(case)
 
-        with self.assertRaises(ValueError):
-            save_batch(self.file_path, self.order)
+                with self.assertRaises(ValueError):
+                    save_batch(self.file_path, self.order)
 
-        with open(self.file_path, "rb") as f:
-            self.assertEqual(f.read(), content)
+                with open(self.file_path, "rb") as f:
+                    self.assertEqual(f.read(), case)
 
-    def test_write_failure(self):
-        # 6. Fehler beim Schreiben (Teilschreibvorgang)
+                files = os.listdir(self.test_dir)
+                self.assertEqual(len(files), 1)
+
+    @patch('modules.picks.json.dump')
+    def test_write_failure(self, mock_dump):
         initial_content = b'{"OLD": {}}'
         with open(self.file_path, "wb") as f:
             f.write(initial_content)
 
-        original_open = builtins.open
-        def mock_open(*args, **kwargs):
-            if "tmp" in str(args[0]):
-                raise OSError("Simulated write error")
-            return original_open(*args, **kwargs)
+        def dump_side_effect(data, f_obj, **kwargs):
+            f_obj.write('{ "partial_json": ')
+            f_obj.flush()
+            raise OSError("Simulated write error")
 
-        with patch('builtins.open', side_effect=mock_open):
-            with self.assertRaises(OSError):
+        mock_dump.side_effect = dump_side_effect
+
+        with patch('os.replace') as mock_replace:
+            with self.assertRaises(OSError) as ctx:
                 save_batch(self.file_path, self.order)
+            self.assertEqual(str(ctx.exception), "Simulated write error")
+            mock_replace.assert_not_called()
+
+        self.assertTrue(mock_dump.called)
 
         with open(self.file_path, "rb") as f:
             self.assertEqual(f.read(), initial_content)
 
-        # Check no tmp files left
         files = os.listdir(self.test_dir)
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0], "test_batches.json")
 
     def test_replace_failure(self):
-        # 7. os.replace() schlägt fehl
         initial_content = b'{"OLD": {}}'
         with open(self.file_path, "wb") as f:
             f.write(initial_content)
@@ -121,13 +132,11 @@ class TestBatchSaveSafety(unittest.TestCase):
         with open(self.file_path, "rb") as f:
             self.assertEqual(f.read(), initial_content)
 
-        # Check no tmp files left
         files = os.listdir(self.test_dir)
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0], "test_batches.json")
 
     def test_filename_only(self):
-        # 8. Zielpfad enthält nur einen Dateinamen
         cwd = os.getcwd()
         os.chdir(self.test_dir)
         try:
@@ -140,16 +149,10 @@ class TestBatchSaveSafety(unittest.TestCase):
             os.chdir(cwd)
 
     def test_temp_file_valid_and_same_dir(self):
-        # Prüfe beim erfolgreichen Austausch, dass Quell- und Zieldatei im selben Verzeichnis liegen
-        # und die Quelle bereits vollständiges, lesbares JSON enthält.
-        # We can test this by mocking os.replace to capture the temp file path before it gets deleted,
-        # checking its location and content.
-
         tmp_path_captured = []
         original_replace = os.replace
         def mock_replace(src, dst):
             tmp_path_captured.append(src)
-            # Read content before replacing
             with open(src, "r") as f:
                 data = json.load(f)
                 assert "TEST-01" in data
@@ -161,6 +164,35 @@ class TestBatchSaveSafety(unittest.TestCase):
         self.assertEqual(len(tmp_path_captured), 1)
         tmp_path = tmp_path_captured[0]
         self.assertEqual(os.path.dirname(tmp_path), os.path.dirname(self.file_path))
+
+    @patch('modules.picks.uuid.uuid4')
+    def test_tmp_collision(self, mock_uuid):
+        initial_content = b'{"OLD": {}}'
+        with open(self.file_path, "wb") as f:
+            f.write(initial_content)
+
+        class FakeUUID:
+            hex = "FIXED_UUID"
+        mock_uuid.return_value = FakeUUID()
+
+        dir_name = os.path.dirname(self.file_path)
+        base_name = os.path.basename(self.file_path)
+        tmp_path = os.path.join(dir_name, f"{base_name}.tmp.FIXED_UUID")
+
+        foreign_content = b"FOREIGN_CONTENT"
+        with open(tmp_path, "wb") as f:
+            f.write(foreign_content)
+
+        with patch('os.replace') as mock_replace:
+            with self.assertRaises(FileExistsError):
+                save_batch(self.file_path, self.order)
+            mock_replace.assert_not_called()
+
+        with open(self.file_path, "rb") as f:
+            self.assertEqual(f.read(), initial_content)
+
+        with open(tmp_path, "rb") as f:
+            self.assertEqual(f.read(), foreign_content)
 
 if __name__ == '__main__':
     unittest.main()
