@@ -264,7 +264,7 @@ class TestImmutability(unittest.TestCase):
         with self.assertRaises(dataclasses.FrozenInstanceError):
             geom.cross_aisle_width_m = 2.0
 
-        with self.assertRaises(AttributeError):
+        with self.assertRaises(dataclasses.FrozenInstanceError):
             geom.total_length_m = 20.0
 
         self.assertEqual(geom.shelf_length_m, 1.30)
