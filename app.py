@@ -1085,6 +1085,22 @@ elif navigation == "8. Video-Import":
                                             st.caption(f"Timestamp: {crop.timestamp_seconds:.2f} s")
 
                                     st.success("Video technisch verarbeitet und Vorschau-Frames extrahiert.")
+
+                                    st.markdown("### Kalibrierungspaket")
+                                    st.write("Dieses Paket enthält ausgewählte Original-Frames und die zugehörigen Scanner-Ausschnitte. Es dient dazu, die spätere Texterkennung anhand echter Beispiele zu entwickeln und zu prüfen.")
+
+                                    from modules.video_calibration import select_calibration_pairs, build_calibration_zip
+                                    selected_pairs = select_calibration_pairs(preview_frames, crops, max_pairs=8)
+                                    zip_bytes = build_calibration_zip(selected_pairs, meta, roi, uploaded_file.name)
+
+                                    st.download_button(
+                                        label="Kalibrierungspaket herunterladen",
+                                        data=zip_bytes,
+                                        file_name="pick_video_calibration.zip",
+                                        mime="application/zip"
+                                    )
+
+                                    st.info("Prüfe vor dem Weitergeben des Pakets, ob auf den Bildern personenbezogene oder betriebsinterne Informationen sichtbar sind.")
                             except VideoROIError as vre:
                                 st.error(str(vre))
                             except Exception as e:
