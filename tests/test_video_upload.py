@@ -74,6 +74,10 @@ class TestVideoUpload(unittest.TestCase):
                 self.assertIsNotNone(self.captured_temp_path)
                 self.assertFalse(os.path.exists(self.captured_temp_path))
 
+    def test_b2_mov_extension(self):
+        with temporary_uploaded_video("test.mov", b"data") as (temp_path, info):
+            self.assertEqual(info.suffix, ".mov")
+
     def test_c_m4v_extension(self):
         with temporary_uploaded_video("test.m4v", b"data") as (temp_path, info):
             self.assertEqual(info.suffix, ".m4v")

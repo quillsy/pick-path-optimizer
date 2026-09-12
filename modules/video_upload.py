@@ -64,11 +64,11 @@ def temporary_uploaded_video(original_filename: str, file_bytes: bytes, mime_typ
 
         try:
             yield temp_path, info
-        except Exception as e:
+        except BaseException as e:
             primary_exception = e
             raise
 
-    except Exception as e:
+    except BaseException as e:
         if primary_exception is None:
             primary_exception = e
         raise
