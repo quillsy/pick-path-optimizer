@@ -337,3 +337,55 @@ class TestROICropping(unittest.TestCase):
             except Exception as e:
                 caught = e
             self.assertIsInstance(caught, MockException)
+
+    @patch('modules.video_roi.subprocess.run')
+    def test_ah_primary_base_and_cleanup_base(self, mock_run):
+        class SyntheticBaseException(BaseException): pass
+        class SyntheticCleanupBaseException(BaseException): pass
+
+        def side_effect(cmd, **kwargs):
+            with open(cmd[-1], "wb") as f: f.write(b"fakecrop")
+            return MagicMock(returncode=0)
+        mock_run.side_effect = side_effect
+
+        primary_error = SyntheticBaseException("primary")
+        cleanup_error = SyntheticCleanupBaseException("cleanup")
+
+        caught = None
+        with patch('modules.video_roi.shutil.rmtree', side_effect=cleanup_error):
+            try:
+                with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+                    raise primary_error
+            except BaseException as e:
+                caught = e
+
+        self.assertIs(caught, primary_error)
+
+        if os.path.exists(self.temp_dir):
+            import shutil
+            shutil.rmtree(self.temp_dir)
+
+    @patch('modules.video_roi.subprocess.run')
+    def test_ai_cleanup_base_error_visible(self, mock_run):
+        class SyntheticCleanupBaseException(BaseException): pass
+
+        def side_effect(cmd, **kwargs):
+            with open(cmd[-1], "wb") as f: f.write(b"fakecrop")
+            return MagicMock(returncode=0)
+        mock_run.side_effect = side_effect
+
+        cleanup_error = SyntheticCleanupBaseException("cleanup")
+
+        caught = None
+        with patch('modules.video_roi.shutil.rmtree', side_effect=cleanup_error):
+            try:
+                with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+                    pass
+            except BaseException as e:
+                caught = e
+
+        self.assertIs(caught, cleanup_error)
+
+        if os.path.exists(self.temp_dir):
+            import shutil
+            shutil.rmtree(self.temp_dir)

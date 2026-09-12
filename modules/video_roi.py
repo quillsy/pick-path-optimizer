@@ -160,6 +160,6 @@ def temporary_roi_crops(
     finally:
         try:
             shutil.rmtree(temp_dir)
-        except Exception as cleanup_error:
+        except BaseException as cleanup_error:
             if primary_exception is None:
                 raise cleanup_error
