@@ -1053,15 +1053,42 @@ elif navigation == "8. Video-Import":
                     with temporary_extracted_frames(temp_path, timestamps) as frames:
                         preview_frames = select_preview_frames(frames)
 
-                        st.markdown("### Frame-Vorschau")
-                        cols = st.columns(3)
-                        for i, pf in enumerate(preview_frames):
-                            col = cols[i % 3]
-                            with col:
-                                st.image(pf.path, use_container_width=True)
-                                st.caption(f"Frame {pf.sequence_index} ({pf.timestamp_seconds:.2f} s)")
+                        st.markdown("### Scannerbereich festlegen")
+                        st.info("Eine automatische Scannererkennung und OCR sind noch nicht aktiv. Der relevante Scannerbereich wird derzeit manuell kalibriert.")
+                        st.write("Nur der markierte Scannerbereich soll in späteren Schritten für Texterkennung verwendet werden.")
+                        st.write("Außerhalb dieses Bereichs liegende Texte und Objekte werden später grundsätzlich ignoriert.")
 
-                        st.success("Video technisch verarbeitet und Vorschau-Frames extrahiert.")
+                        col_l, col_t, col_r, col_b = st.columns(4)
+                        with col_l:
+                            roi_left = st.number_input("Links (%)", min_value=0.0, max_value=100.0, value=0.0, key="roi_left")
+                        with col_t:
+                            roi_top = st.number_input("Oben (%)", min_value=0.0, max_value=100.0, value=0.0, key="roi_top")
+                        with col_r:
+                            roi_right = st.number_input("Rechts (%)", min_value=0.0, max_value=100.0, value=100.0, key="roi_right")
+                        with col_b:
+                            roi_bottom = st.number_input("Unten (%)", min_value=0.0, max_value=100.0, value=100.0, key="roi_bottom")
+
+                        if roi_left >= roi_right or roi_top >= roi_bottom:
+                            st.error("Der gewählte Scannerbereich ist ungültig.")
+                        else:
+                            from modules.video_roi import NormalizedROI, temporary_roi_crops, VideoROIError
+                            try:
+                                roi = NormalizedROI(roi_left / 100.0, roi_top / 100.0, roi_right / 100.0, roi_bottom / 100.0)
+                                with temporary_roi_crops(preview_frames, roi, meta.width, meta.height) as crops:
+                                    st.markdown("### Frame-Vorschau")
+                                    cols = st.columns(3)
+                                    for i, crop in enumerate(crops):
+                                        col = cols[i % 3]
+                                        with col:
+                                            st.image(crop.source_frame_path, caption=f"Original {crop.sequence_index}", use_container_width=True)
+                                            st.image(crop.crop_path, caption=f"Crop ({crop.pixel_roi.x}, {crop.pixel_roi.y}, {crop.pixel_roi.width}x{crop.pixel_roi.height})", use_container_width=True)
+                                            st.caption(f"Timestamp: {crop.timestamp_seconds:.2f} s")
+
+                                    st.success("Video technisch verarbeitet und Vorschau-Frames extrahiert.")
+                            except VideoROIError as vre:
+                                st.error(str(vre))
+                            except Exception as e:
+                                st.error("Fehler beim Erzeugen der Crop-Vorschau.")
 
                 except VideoFramesError as vfe:
                     st.error(str(vfe))
