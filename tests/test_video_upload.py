@@ -77,6 +77,7 @@ class TestVideoUpload(unittest.TestCase):
     def test_b2_mov_extension(self):
         with temporary_uploaded_video("test.mov", b"data") as (temp_path, info):
             self.assertEqual(info.suffix, ".mov")
+            self.assertTrue(temp_path.endswith(".mov"))
 
     def test_c_m4v_extension(self):
         with temporary_uploaded_video("test.m4v", b"data") as (temp_path, info):
@@ -227,6 +228,31 @@ class TestVideoUpload(unittest.TestCase):
             self.assertEqual(info.original_filename, "video.mp4")
             self.assertEqual(info.suffix, ".mp4")
             self.assertEqual(info.mime_type, "video/mp4")
+
+    @patch('modules.video_upload.os.remove')
+    def test_q_cleanup_error_with_primary_base_exception(self, mock_remove):
+        class SyntheticBaseException(BaseException):
+            pass
+
+        primary_exception = SyntheticBaseException("Primary processing base error")
+        cleanup_error = OSError("Simulated cleanup error")
+        mock_remove.side_effect = cleanup_error
+        caught_exception = None
+
+        with patch('modules.video_upload.tempfile.mkstemp', side_effect=self.patched_mkstemp):
+            try:
+                with temporary_uploaded_video("test.mp4", b"data") as (temp_path, info):
+                    self.assertTrue(os.path.exists(temp_path))
+                    raise primary_exception
+            except BaseException as e:
+                caught_exception = e
+
+            self.assertIs(caught_exception, primary_exception)
+            self.assertIsNotNone(self.captured_temp_path)
+
+            self.assertTrue(os.path.exists(self.captured_temp_path))
+            os.unlink(self.captured_temp_path)
+            self.assertFalse(os.path.exists(self.captured_temp_path))
 
 if __name__ == '__main__':
     unittest.main()
