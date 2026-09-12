@@ -30,7 +30,10 @@ def temporary_uploaded_video(original_filename: str, file_bytes: bytes, mime_typ
     if suffix not in [".mp4", ".mov", ".m4v"]:
         raise ValueError(f"Nicht unterstützte Dateiendung: {suffix}")
 
+    expected_sha256 = hashlib.sha256(file_bytes).hexdigest()
+
     fd, temp_path = tempfile.mkstemp(prefix="video_", suffix=suffix)
+    primary_exception = None
     try:
         with open(fd, "wb") as f:
             f.write(file_bytes)
@@ -48,6 +51,9 @@ def temporary_uploaded_video(original_filename: str, file_bytes: bytes, mime_typ
 
         actual_sha256 = sha256_hash.hexdigest()
 
+        if actual_sha256 != expected_sha256:
+            raise RuntimeError("Integritätsprüfung fehlgeschlagen: SHA-256 stimmt nicht mit dem Upload überein.")
+
         info = UploadedVideoInfo(
             original_filename=original_filename,
             suffix=suffix,
@@ -56,11 +62,20 @@ def temporary_uploaded_video(original_filename: str, file_bytes: bytes, mime_typ
             mime_type=mime_type
         )
 
-        yield temp_path, info
+        try:
+            yield temp_path, info
+        except Exception as e:
+            primary_exception = e
+            raise
 
+    except Exception as e:
+        if primary_exception is None:
+            primary_exception = e
+        raise
     finally:
         if os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
-            except Exception:
-                pass
+            except Exception as cleanup_err:
+                if primary_exception is None:
+                    raise cleanup_err
