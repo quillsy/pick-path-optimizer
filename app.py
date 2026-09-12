@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from modules.warehouse import Warehouse
 from modules.picks import Pick, PickOrder, load_all_batches, save_batch, delete_batch, generate_next_batch_id
 from modules.batch_backup import read_batch_backup
+from modules.video_upload import temporary_uploaded_video
 from modules.routing import calculate_route_distance, calculate_route_metrics, get_original_route, get_simple_sorted_route
 from modules.optimizer_benchmark import (
     benchmark_batch,
@@ -82,7 +83,7 @@ st.sidebar.markdown("---")
 
 navigation = st.sidebar.radio(
     "Navigation",
-    ["1. Übersicht", "2. Lagerdaten", "3. Pick-Batches", "4. Lagerkarte", "5. Routenvergleich", "6. Benchmark", "7. Einstellungen"]
+    ["1. Übersicht", "2. Lagerdaten", "3. Pick-Batches", "4. Lagerkarte", "5. Routenvergleich", "6. Benchmark", "7. Einstellungen", "8. Video-Import"]
 )
 
 # ----------------------------------------------------
@@ -1012,3 +1013,32 @@ elif navigation == "7. Einstellungen":
             "Bitte prüfe die Quelldatei und ihre Leseberechtigung "
             "und versuche es erneut."
         )
+
+# ----------------------------------------------------
+# Page 8: Video-Import
+# ----------------------------------------------------
+elif navigation == "8. Video-Import":
+    st.markdown("<h1 class='main-header'>Video-Import – Vorbereitung</h1>", unsafe_allow_html=True)
+    st.info("Hier können Pick-Videos für die spätere automatische Erkennung hochgeladen werden. In diesem Entwicklungsschritt wird das Video noch nicht analysiert und es werden keine Pick-Daten gespeichert.")
+
+    uploaded_file = st.file_uploader("Pick-Video hochladen", type=["mp4", "mov", "m4v"])
+    if uploaded_file is not None:
+        try:
+            file_bytes = uploaded_file.getvalue()
+            with temporary_uploaded_video(uploaded_file.name, file_bytes, uploaded_file.type) as (temp_path, info):
+                st.success("Temporäre Verarbeitung erfolgreich")
+
+                st.markdown("### Datei-Informationen")
+                st.write(f"**Dateiname:** `{info.original_filename}`")
+                st.write(f"**Format:** `{info.suffix}`")
+                st.write(f"**Dateigröße:** {info.size_bytes} Bytes ({info.size_bytes / (1024*1024):.2f} MB)")
+                st.write(f"**SHA-256:** `{info.sha256}`")
+                if info.mime_type:
+                    st.write(f"**MIME-Type:** `{info.mime_type}`")
+
+                st.info("Das hochgeladene Video wird in diesem Entwicklungsschritt nur temporär verarbeitet und anschließend gelöscht. Es wird nicht dauerhaft im Projekt oder in den Pick-Batches gespeichert.")
+                st.info("Pick-Erkennung ist in diesem Schritt noch nicht aktiv.")
+        except ValueError as ve:
+            st.error(str(ve))
+        except Exception:
+            st.error("Ein unerwarteter Fehler ist bei der temporären Verarbeitung aufgetreten.")
