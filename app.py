@@ -29,23 +29,18 @@ st.set_page_config(
 st.markdown("""
 <style>
     /* Premium style additions */
-    .stApp {
-        background-color: #f8fafc;
-    }
     .main-header {
         font-family: 'Outfit', 'Inter', sans-serif;
-        color: #1e293b;
         font-weight: 700;
         margin-bottom: 0.5rem;
     }
     .sub-header {
         font-family: 'Inter', sans-serif;
-        color: #64748b;
         font-weight: 400;
         margin-bottom: 2rem;
     }
     .metric-card {
-        background-color: white;
+        background-color: transparent;
         padding: 1.25rem;
         border-radius: 0.75rem;
         border: 1px solid #e2e8f0;
@@ -53,12 +48,10 @@ st.markdown("""
     }
     .metric-label {
         font-size: 0.875rem;
-        color: #64748b;
         font-weight: 500;
     }
     .metric-value {
         font-size: 1.5rem;
-        color: #0f172a;
         font-weight: 700;
         margin-top: 0.25rem;
     }
