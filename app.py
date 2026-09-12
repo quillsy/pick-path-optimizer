@@ -1026,7 +1026,9 @@ elif navigation == "8. Video-Import":
         try:
             file_bytes = uploaded_file.getvalue()
             with temporary_uploaded_video(uploaded_file.name, file_bytes, uploaded_file.type) as (temp_path, info):
-                st.success("Temporäre Verarbeitung erfolgreich")
+                from modules.video_frames import probe_video, calculate_sample_timestamps, temporary_extracted_frames, select_preview_frames, VideoFramesError
+
+                st.success("Video technisch verarbeitet und Vorschau-Frames extrahiert.")
 
                 st.markdown("### Datei-Informationen")
                 st.write(f"**Dateiname:** `{info.original_filename}`")
@@ -1036,8 +1038,37 @@ elif navigation == "8. Video-Import":
                 if info.mime_type:
                     st.write(f"**MIME-Type:** `{info.mime_type}`")
 
-                st.info("Das hochgeladene Video wird in diesem Entwicklungsschritt nur temporär verarbeitet und anschließend gelöscht. Es wird nicht dauerhaft im Projekt oder in den Pick-Batches gespeichert.")
-                st.info("Pick-Erkennung ist in diesem Schritt noch nicht aktiv.")
+                try:
+                    meta = probe_video(temp_path)
+                    st.markdown("### Video-Metadaten")
+                    st.write(f"**Dauer:** {meta.duration_seconds:.2f} s")
+                    st.write(f"**Auflösung:** {meta.width}x{meta.height}")
+                    st.write(f"**FPS:** {meta.fps:.2f}")
+                    if meta.video_codec:
+                        st.write(f"**Codec:** `{meta.video_codec}`")
+                    if meta.container_format:
+                        st.write(f"**Container:** `{meta.container_format}`")
+
+                    timestamps = calculate_sample_timestamps(meta.duration_seconds)
+                    st.write(f"**Anzahl Sampling-Frames:** {len(timestamps)}")
+
+                    with temporary_extracted_frames(temp_path, timestamps) as frames:
+                        preview_frames = select_preview_frames(frames)
+
+                        st.markdown("### Frame-Vorschau")
+                        cols = st.columns(3)
+                        for i, pf in enumerate(preview_frames):
+                            col = cols[i % 3]
+                            with col:
+                                st.image(pf.path, use_container_width=True)
+                                st.caption(f"Frame {pf.sequence_index} ({pf.timestamp_seconds:.2f} s)")
+
+                except VideoFramesError as vfe:
+                    st.error(str(vfe))
+                except Exception as e:
+                    st.error("Fehler bei der Metadatenanalyse oder Frame-Extraktion.")
+
+                st.info("Pick-Erkennung / OCR ist noch nicht aktiv.")
         except ValueError as ve:
             st.error(str(ve))
         except Exception:
