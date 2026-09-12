@@ -57,14 +57,22 @@ def probe_video(video_path: str) -> VideoMetadata:
     except json.JSONDecodeError:
         raise VideoFramesError("ffprobe gab ungültiges JSON zurück.")
 
+    if not isinstance(data, dict):
+        raise VideoFramesError("ffprobe gab keine gültige JSON-Struktur zurück.")
+
     streams = data.get("streams", [])
-    video_streams = [s for s in streams if s.get("codec_type") == "video"]
+    if not isinstance(streams, list):
+        raise VideoFramesError("ffprobe JSON enthält keine gültige streams-Liste.")
+
+    video_streams = [s for s in streams if isinstance(s, dict) and s.get("codec_type") == "video"]
 
     if not video_streams:
         raise VideoFramesError("Kein Video-Stream in der Datei gefunden.")
 
     v_stream = video_streams[0]
     format_info = data.get("format", {})
+    if not isinstance(format_info, dict):
+        format_info = {}
 
     try:
         duration_str = v_stream.get("duration") or format_info.get("duration")
@@ -74,8 +82,8 @@ def probe_video(video_path: str) -> VideoMetadata:
     except (ValueError, TypeError):
         raise VideoFramesError("Videodauer (duration) fehlt oder ist ungültig.")
 
-    if duration_seconds <= 0:
-        raise VideoFramesError("Videodauer muss positiv sein.")
+    if not math.isfinite(duration_seconds) or duration_seconds <= 0:
+        raise VideoFramesError("Videodauer muss eine endliche positive Zahl sein.")
 
     try:
         width = int(v_stream.get("width", 0))
@@ -128,42 +136,47 @@ def calculate_sample_timestamps(
 ) -> List[float]:
     if not isinstance(max_frames, int) or isinstance(max_frames, bool) or max_frames <= 0:
         raise ValueError("max_frames muss ein positiver Integer sein.")
-    if duration_seconds <= 0:
-        raise ValueError("duration_seconds muss positiv sein.")
-    if interval_seconds <= 0:
-        raise ValueError("interval_seconds muss positiv sein.")
+    if not isinstance(duration_seconds, (int, float)) or isinstance(duration_seconds, bool) or not math.isfinite(duration_seconds) or duration_seconds <= 0:
+        raise ValueError("duration_seconds muss eine endliche positive Zahl sein.")
+    if not isinstance(interval_seconds, (int, float)) or isinstance(interval_seconds, bool) or not math.isfinite(interval_seconds) or interval_seconds <= 0:
+        raise ValueError("interval_seconds muss eine endliche positive Zahl sein.")
 
-    raw_samples = []
-    current = 0.0
-    while current < duration_seconds:
-        raw_samples.append(current)
-        current += interval_seconds
-
-    if not raw_samples:
+    if max_frames == 1:
         return [0.0]
 
-    if len(raw_samples) <= max_frames:
-        return raw_samples
+    raw_count = int(math.ceil(duration_seconds / interval_seconds))
+    if (raw_count - 1) * interval_seconds >= duration_seconds:
+        raw_count -= 1
 
-    # We have more samples than max_frames. Select evenly.
-    # We want exactly max_frames samples, starting with the first, ending with the last possible.
-    indices = [int(round(i * (len(raw_samples) - 1) / (max_frames - 1))) for i in range(max_frames)]
+    if raw_count <= 0:
+        return [0.0]
 
-    selected_samples = [raw_samples[i] for i in indices]
+    if raw_count <= max_frames:
+        return [i * interval_seconds for i in range(raw_count)]
 
-    # Remove any potential duplicates (due to rounding) while preserving order
+    indices = [int(round(i * (raw_count - 1) / (max_frames - 1))) for i in range(max_frames)]
+
     final_samples = []
     seen = set()
-    for s in selected_samples:
-        if s not in seen:
-            final_samples.append(s)
-            seen.add(s)
+    for idx in indices:
+        if idx not in seen:
+            val = idx * interval_seconds
+            if val >= duration_seconds:
+                val = duration_seconds - 1e-6
+            final_samples.append(val)
+            seen.add(idx)
 
     return final_samples
 
 def select_preview_frames(frames: List[ExtractedFrame], max_preview: int = MAX_PREVIEW_FRAMES) -> List[ExtractedFrame]:
     if not isinstance(max_preview, int) or isinstance(max_preview, bool) or max_preview <= 0:
         raise ValueError("max_preview muss ein positiver Integer sein.")
+
+    if not frames:
+        return []
+
+    if max_preview == 1:
+        return [frames[0]]
 
     if len(frames) <= max_preview:
         return list(frames)
@@ -181,12 +194,19 @@ def select_preview_frames(frames: List[ExtractedFrame], max_preview: int = MAX_P
 
 @contextmanager
 def temporary_extracted_frames(video_path: str, timestamps: List[float]) -> Iterator[List[ExtractedFrame]]:
+    """
+    Extrahiert Frames via ffmpeg in ein temporäres Verzeichnis.
+    Die obere Zeitgrenze (Video-Dauer) wird bewusst nicht hier, sondern beim Sampling-Aufrufer
+    validiert, da diese API keine Videodauer kennt.
+    """
     if len(timestamps) > MAX_EXTRACTED_FRAMES:
         raise VideoFramesError(f"Maximal {MAX_EXTRACTED_FRAMES} Frames erlaubt.")
 
     for ts in timestamps:
-        if ts < 0:
-            raise VideoFramesError("Timestamp darf nicht negativ sein.")
+        if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+            raise VideoFramesError("Timestamp muss eine Zahl sein.")
+        if not math.isfinite(ts) or ts < 0:
+            raise VideoFramesError("Timestamp muss endlich und >= 0 sein.")
 
     temp_dir = tempfile.mkdtemp(prefix="video_frames_")
     primary_exception = None

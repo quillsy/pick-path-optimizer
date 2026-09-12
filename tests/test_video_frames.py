@@ -117,7 +117,94 @@ class TestVideoFramesMetadata(unittest.TestCase):
         with self.assertRaises(VideoFramesError):
             probe_video("fake.mp4")
 
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_j2_stdout_null(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="null")
+        with self.assertRaises(VideoFramesError):
+            probe_video("fake.mp4")
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_j3_stdout_empty_array(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="[]")
+        with self.assertRaises(VideoFramesError):
+            probe_video("fake.mp4")
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_j4_streams_not_array(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout='{"streams": "string"}')
+        with self.assertRaises(VideoFramesError):
+            probe_video("fake.mp4")
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_j5_duration_nan(self, mock_run):
+        data = dict(self.valid_ffprobe_data)
+        data["streams"][0]["duration"] = "nan"
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(data))
+        with self.assertRaises(VideoFramesError):
+            probe_video("fake.mp4")
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_j6_duration_inf(self, mock_run):
+        data = dict(self.valid_ffprobe_data)
+        data["streams"][0]["duration"] = "inf"
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(data))
+        with self.assertRaises(VideoFramesError):
+            probe_video("fake.mp4")
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_j7_shell_false(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(self.valid_ffprobe_data))
+        probe_video("fake.mp4")
+        kwargs = mock_run.call_args.kwargs
+        self.assertFalse(kwargs.get("shell", False))
+        self.assertIn("timeout", kwargs)
+        args = mock_run.call_args.args[0]
+        self.assertIsInstance(args, list)
+        self.assertEqual(args[0], "ffprobe")
+
 class TestVideoFramesSampling(unittest.TestCase):
+
+    def test_a_max_frames_1(self):
+        self.assertEqual(calculate_sample_timestamps(10.0, 0.5, 1), [0.0])
+
+    def test_b_duration_nan_inf(self):
+        with self.assertRaises(ValueError):
+            calculate_sample_timestamps(float('nan'))
+        with self.assertRaises(ValueError):
+            calculate_sample_timestamps(float('inf'))
+        with self.assertRaises(ValueError):
+            calculate_sample_timestamps(float('-inf'))
+
+    def test_c_interval_nan_inf(self):
+        with self.assertRaises(ValueError):
+            calculate_sample_timestamps(10.0, float('nan'))
+        with self.assertRaises(ValueError):
+            calculate_sample_timestamps(10.0, float('inf'))
+        with self.assertRaises(ValueError):
+            calculate_sample_timestamps(10.0, float('-inf'))
+
+    def test_d_boolean_args(self):
+        with self.assertRaises(ValueError):
+            calculate_sample_timestamps(True, 0.5, 10)
+        with self.assertRaises(ValueError):
+            calculate_sample_timestamps(10.0, True, 10)
+        with self.assertRaises(ValueError):
+            calculate_sample_timestamps(10.0, 0.5, True)
+
+    def test_e_extreme_sampling(self):
+        samples = calculate_sample_timestamps(1_000_000_000.0, 0.0001, 300)
+        self.assertLessEqual(len(samples), 300)
+        self.assertEqual(samples[0], 0.0)
+        self.assertLess(samples[-1], 1_000_000_000.0)
+        self.assertGreater(samples[-1], 900_000_000.0)
+        self.assertEqual(samples, sorted(list(set(samples))))
+
+    def test_f_not_exact_multiple(self):
+        samples = calculate_sample_timestamps(2.2, 0.5)
+        self.assertTrue(all(s < 2.2 for s in samples))
+        self.assertEqual(samples, [0.0, 0.5, 1.0, 1.5, 2.0])
+
     def test_k_standard_interval(self):
         samples = calculate_sample_timestamps(2.0, 0.5)
         self.assertEqual(samples, [0.0, 0.5, 1.0, 1.5])
@@ -285,10 +372,24 @@ class TestVideoFramesExtraction(unittest.TestCase):
             with temporary_extracted_frames("fake.mp4", [-1.0]):
                 pass
 
-    def test_ad_timestamp_beyond_duration(self):
-        # The extraction API doesn't know the duration, so it accepts it.
-        # But ffmpeg might fail or return no frame.
-        pass # Explicitly documented that Sampling-Plan guarantees this.
+    @patch('modules.video_frames.subprocess.run')
+    def test_ad_timestamp_beyond_duration(self, mock_run):
+        # Die obere Grenze zur Videodauer liegt bewusst beim Sampling-Aufrufer;
+        # diese API kennt keine Videodauer.
+        def side_effect(cmd, **kwargs):
+            with open(cmd[-1], "wb") as f: f.write(b"data")
+            return MagicMock(returncode=0)
+        mock_run.side_effect = side_effect
+
+        with patch('modules.video_frames.tempfile.mkdtemp', side_effect=self.patched_mkdtemp):
+            with temporary_extracted_frames("fake.mp4", [9999.0]) as frames:
+                self.assertEqual(frames[0].timestamp_seconds, 9999.0)
+                cmd = mock_run.call_args.args[0]
+                self.assertIn("9999.0", cmd)
+                kwargs = mock_run.call_args.kwargs
+                self.assertFalse(kwargs.get("shell", False))
+                self.assertIn("timeout", kwargs)
+                self.assertEqual(cmd[0], "ffmpeg")
 
     @patch('modules.video_frames.subprocess.run')
     def test_ae_foreign_file_protected(self, mock_run):
@@ -351,6 +452,27 @@ class TestVideoFramesExtraction(unittest.TestCase):
         self.assertIs(caught, cleanup_exception)
 
 class TestPreviewSelection(unittest.TestCase):
+
+    def test_select_preview_empty(self):
+        self.assertEqual(select_preview_frames([]), [])
+
+    def test_select_preview_max_1(self):
+        frames = [ExtractedFrame(i, i*0.5, "path", 100, "hash") for i in range(5)]
+        selected = select_preview_frames(frames, 1)
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0].sequence_index, 0)
+
+    def test_select_preview_max_invalid(self):
+        frames = [ExtractedFrame(i, i*0.5, "path", 100, "hash") for i in range(5)]
+        with self.assertRaises(ValueError):
+            select_preview_frames(frames, 0)
+        with self.assertRaises(ValueError):
+            select_preview_frames(frames, -1)
+        with self.assertRaises(ValueError):
+            select_preview_frames(frames, 1.5)
+        with self.assertRaises(ValueError):
+            select_preview_frames(frames, True)
+
     def test_select_preview_less_than_max(self):
         frames = [ExtractedFrame(i, i*0.5, "path", 100, "hash") for i in range(5)]
         selected = select_preview_frames(frames, 12)

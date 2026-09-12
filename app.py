@@ -1028,8 +1028,6 @@ elif navigation == "8. Video-Import":
             with temporary_uploaded_video(uploaded_file.name, file_bytes, uploaded_file.type) as (temp_path, info):
                 from modules.video_frames import probe_video, calculate_sample_timestamps, temporary_extracted_frames, select_preview_frames, VideoFramesError
 
-                st.success("Video technisch verarbeitet und Vorschau-Frames extrahiert.")
-
                 st.markdown("### Datei-Informationen")
                 st.write(f"**Dateiname:** `{info.original_filename}`")
                 st.write(f"**Format:** `{info.suffix}`")
@@ -1063,11 +1061,14 @@ elif navigation == "8. Video-Import":
                                 st.image(pf.path, use_container_width=True)
                                 st.caption(f"Frame {pf.sequence_index} ({pf.timestamp_seconds:.2f} s)")
 
+                        st.success("Video technisch verarbeitet und Vorschau-Frames extrahiert.")
+
                 except VideoFramesError as vfe:
                     st.error(str(vfe))
                 except Exception as e:
                     st.error("Fehler bei der Metadatenanalyse oder Frame-Extraktion.")
 
+                st.info("Das hochgeladene Video und die extrahierten Frames werden nur temporär verarbeitet und anschließend gelöscht.")
                 st.info("Pick-Erkennung / OCR ist noch nicht aktiv.")
         except ValueError as ve:
             st.error(str(ve))
