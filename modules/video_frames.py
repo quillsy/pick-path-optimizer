@@ -5,6 +5,7 @@ import os
 import hashlib
 import tempfile
 import shutil
+import decimal
 from dataclasses import dataclass
 from typing import Optional, Iterator, List
 from contextlib import contextmanager
@@ -144,27 +145,51 @@ def calculate_sample_timestamps(
     if max_frames == 1:
         return [0.0]
 
-    raw_count = int(math.ceil(duration_seconds / interval_seconds))
-    if (raw_count - 1) * interval_seconds >= duration_seconds:
-        raw_count -= 1
+    with decimal.localcontext() as ctx:
+        ctx.prec = 1000
+        d_dur = decimal.Decimal.from_float(float(duration_seconds))
+        d_int = decimal.Decimal.from_float(float(interval_seconds))
+        d_raw = d_dur / d_int
+        raw_count = int(d_raw.to_integral_exact(rounding=decimal.ROUND_CEILING))
+
+        if (raw_count - 1) * d_int >= d_dur:
+            raw_count -= 1
 
     if raw_count <= 0:
         return [0.0]
 
+    indices = []
     if raw_count <= max_frames:
-        return [i * interval_seconds for i in range(raw_count)]
-
-    indices = [int(round(i * (raw_count - 1) / (max_frames - 1))) for i in range(max_frames)]
+        indices = list(range(raw_count))
+    else:
+        # Overflow-sichere Integer-Rundung: (A + B // 2) // B
+        denominator = max_frames - 1
+        for i in range(max_frames):
+            idx = (i * (raw_count - 1) + denominator // 2) // denominator
+            indices.append(idx)
 
     final_samples = []
     seen = set()
-    for idx in indices:
-        if idx not in seen:
-            val = idx * interval_seconds
-            if val >= duration_seconds:
-                val = duration_seconds - 1e-6
-            final_samples.append(val)
-            seen.add(idx)
+
+    with decimal.localcontext() as ctx:
+        ctx.prec = 1000
+        d_int = decimal.Decimal.from_float(float(interval_seconds))
+
+        for idx in indices:
+            if idx not in seen:
+                try:
+                    val = float(decimal.Decimal(idx) * d_int)
+                except OverflowError:
+                    val = float('inf')
+
+                if not math.isfinite(val):
+                    val = duration_seconds
+
+                if val >= duration_seconds:
+                    val = math.nextafter(duration_seconds, -math.inf)
+
+                final_samples.append(val)
+                seen.add(idx)
 
     return final_samples
 

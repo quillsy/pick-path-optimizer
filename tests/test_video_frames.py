@@ -1,6 +1,7 @@
 import unittest
 import os
 import json
+import math
 import tempfile
 import shutil
 import hashlib
@@ -163,6 +164,15 @@ class TestVideoFramesMetadata(unittest.TestCase):
         self.assertIsInstance(args, list)
         self.assertEqual(args[0], "ffprobe")
 
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_j6_duration_minus_inf(self, mock_run):
+        data = dict(self.valid_ffprobe_data)
+        data["streams"][0]["duration"] = "-inf"
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(data))
+        with self.assertRaises(VideoFramesError):
+            probe_video("fake.mp4")
+
 class TestVideoFramesSampling(unittest.TestCase):
 
     def test_a_max_frames_1(self):
@@ -199,6 +209,21 @@ class TestVideoFramesSampling(unittest.TestCase):
         self.assertLess(samples[-1], 1_000_000_000.0)
         self.assertGreater(samples[-1], 900_000_000.0)
         self.assertEqual(samples, sorted(list(set(samples))))
+
+
+    def test_e2_overflow_sampling(self):
+        samples = calculate_sample_timestamps(1e308, 1e-308, 300)
+        self.assertEqual(len(samples), 300)
+        self.assertEqual(samples[0], 0.0)
+        self.assertTrue(all(math.isfinite(s) for s in samples))
+        self.assertTrue(all(0 <= s < 1e308 for s in samples))
+        self.assertEqual(samples, sorted(list(set(samples))))
+
+    def test_e3_normal_raster_preservation(self):
+        self.assertEqual(calculate_sample_timestamps(2.0, 0.5), [0.0, 0.5, 1.0, 1.5])
+        self.assertEqual(calculate_sample_timestamps(2.2, 0.5), [0.0, 0.5, 1.0, 1.5, 2.0])
+        self.assertEqual(calculate_sample_timestamps(0.3, 0.5), [0.0])
+        self.assertEqual(calculate_sample_timestamps(10.0, 0.5, 1), [0.0])
 
     def test_f_not_exact_multiple(self):
         samples = calculate_sample_timestamps(2.2, 0.5)
