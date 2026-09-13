@@ -389,3 +389,92 @@ class TestROICropping(unittest.TestCase):
         if os.path.exists(self.temp_dir):
             import shutil
             shutil.rmtree(self.temp_dir)
+
+    @patch('modules.video_roi.subprocess.run')
+    def test_aj_called_process_error_with_stderr(self, mock_run):
+        import subprocess
+        mock_run.side_effect = subprocess.CalledProcessError(234, "ffmpeg", stderr="Invalid argument")
+        with self.assertRaisesRegex(VideoROIError, r"Code 234.*Invalid argument"):
+            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+                pass
+
+    @patch('modules.video_roi.subprocess.run')
+    def test_ak_called_process_error_empty_stderr(self, mock_run):
+        import subprocess
+        # Leeres stderr testen (sollte keinen Doppelpunkt erzeugen)
+        mock_run.side_effect = subprocess.CalledProcessError(234, "ffmpeg", stderr="")
+        with self.assertRaisesRegex(VideoROIError, r"^ffmpeg Fehler beim Croppen \(Code 234\)\.$"):
+            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+                pass
+
+    @patch('modules.video_roi.subprocess.run')
+    def test_al_source_frame_path_masked(self, mock_run):
+        import subprocess
+        frame_path = self.frames[0].path
+        mock_run.side_effect = subprocess.CalledProcessError(1, "ffmpeg", stderr=f"Fehler in {frame_path} aufgetreten")
+        with self.assertRaises(VideoROIError) as ctx:
+            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+                pass
+        self.assertNotIn(frame_path, str(ctx.exception))
+        self.assertIn("<source-frame>", str(ctx.exception))
+
+    @patch('modules.video_roi.subprocess.run')
+    def test_am_crop_path_masked(self, mock_run):
+        import subprocess
+
+        def side_effect(cmd, **kwargs):
+            # cmd[-1] is the crop_path generated internally
+            crop_path = cmd[-1]
+            raise subprocess.CalledProcessError(1, "ffmpeg", stderr=f"Cannot write to {crop_path}")
+
+        mock_run.side_effect = side_effect
+
+        with self.assertRaises(VideoROIError) as ctx:
+            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+                pass
+
+        # The exact crop path shouldn't be in the error, but the placeholder should.
+        # Note: we can't easily assertNotIn since crop_path is dynamically generated,
+        # but the masking guarantees it's replaced.
+        self.assertIn("<crop-output>", str(ctx.exception))
+        self.assertNotIn(".jpg", str(ctx.exception).split("<crop-output>")[1] if "<crop-output>" in str(ctx.exception) else "")
+
+    @patch('modules.video_roi.subprocess.run')
+    def test_an_temp_dir_masked(self, mock_run):
+        import subprocess
+        def side_effect(cmd, **kwargs):
+            import os
+            temp_dir = os.path.dirname(cmd[-1])
+            raise subprocess.CalledProcessError(1, "ffmpeg", stderr=f"No space in {temp_dir} left")
+        mock_run.side_effect = side_effect
+        with self.assertRaises(VideoROIError) as ctx:
+            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+                pass
+        self.assertIn("<temp-dir>", str(ctx.exception))
+
+    @patch('modules.video_roi.subprocess.run')
+    def test_ao_long_stderr_truncated(self, mock_run):
+        import subprocess
+        long_err = "X" * 3000
+        mock_run.side_effect = subprocess.CalledProcessError(1, "ffmpeg", stderr=long_err)
+        with self.assertRaises(VideoROIError) as ctx:
+            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+                pass
+        msg = str(ctx.exception)
+        self.assertIn("[gekürzt]", msg)
+        self.assertLess(len(msg), 2200)
+
+    @patch('modules.video_roi.subprocess.run')
+    def test_ap_subprocess_args_capture(self, mock_run):
+        def side_effect(cmd, **kwargs):
+            with open(cmd[-1], "wb") as f: f.write(b"fakecrop")
+            return MagicMock(returncode=0)
+        mock_run.side_effect = side_effect
+
+        with temporary_roi_crops([self.frames[0]], self.roi, 100, 100) as crops:
+            kwargs = mock_run.call_args.kwargs
+            self.assertTrue(kwargs.get('capture_output'))
+            self.assertTrue(kwargs.get('text'))
+            self.assertFalse(kwargs.get('shell'))
+            self.assertTrue(kwargs.get('check'))
+            self.assertIn('timeout', kwargs)

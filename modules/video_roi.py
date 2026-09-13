@@ -13,6 +13,24 @@ from modules.video_frames import ExtractedFrame
 class VideoROIError(Exception):
     pass
 
+MAX_FFMPEG_ERROR_CHARS = 2000
+
+def _sanitize_ffmpeg_error(stderr_text: str, source_frame_path: str, crop_path: str, temp_dir: str) -> str:
+    if not stderr_text:
+        return ""
+    text = stderr_text.strip()
+    if source_frame_path:
+        text = text.replace(source_frame_path, "<source-frame>")
+    if crop_path:
+        text = text.replace(crop_path, "<crop-output>")
+    if temp_dir:
+        text = text.replace(temp_dir, "<temp-dir>")
+
+    if len(text) > MAX_FFMPEG_ERROR_CHARS:
+        text = text[:MAX_FFMPEG_ERROR_CHARS] + "... [gekürzt]"
+
+    return text
+
 @dataclass(frozen=True)
 class NormalizedROI:
     left: float
@@ -121,14 +139,21 @@ def temporary_roi_crops(
                     ],
                     shell=False,
                     check=True,
-                    timeout=30
+                    timeout=30,
+                    capture_output=True,
+                    text=True
                 )
             except FileNotFoundError:
                 raise VideoROIError("ffmpeg ist nicht installiert oder nicht im PATH.")
             except subprocess.TimeoutExpired:
                 raise VideoROIError("ffmpeg Zeitüberschreitung beim Croppen.")
             except subprocess.CalledProcessError as e:
-                raise VideoROIError(f"ffmpeg Fehler beim Croppen (Code {e.returncode}).")
+                stderr_text = (e.stderr or "").strip()
+                sanitized = _sanitize_ffmpeg_error(stderr_text, frame.path, crop_path, temp_dir)
+                if sanitized:
+                    raise VideoROIError(f"ffmpeg Fehler beim Croppen (Code {e.returncode}): {sanitized}")
+                else:
+                    raise VideoROIError(f"ffmpeg Fehler beim Croppen (Code {e.returncode}).")
 
             if not os.path.exists(crop_path):
                 raise VideoROIError("Crop-Datei wurde von ffmpeg nicht erstellt.")
