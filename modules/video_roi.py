@@ -111,18 +111,16 @@ def roi_to_pixels(roi: NormalizedROI, frame_width: int, frame_height: int) -> Pi
 @contextmanager
 def temporary_roi_crops(
     frames: List[ExtractedFrame],
-    roi: NormalizedROI,
-    frame_width: int,
-    frame_height: int
+    roi: NormalizedROI
 ) -> Iterator[List[ROICrop]]:
 
-    pixel_roi = roi_to_pixels(roi, frame_width, frame_height)
     temp_dir = tempfile.mkdtemp(prefix="video_crops_")
     primary_exception = None
 
     try:
         crops = []
         for frame in frames:
+            pixel_roi = roi_to_pixels(roi, frame.width, frame.height)
             crop_filename = f"crop_{frame.sequence_index:04d}.jpg"
             crop_path = os.path.join(temp_dir, crop_filename)
 

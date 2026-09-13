@@ -1026,7 +1026,7 @@ elif navigation == "8. Video-Import":
         try:
             file_bytes = uploaded_file.getvalue()
             with temporary_uploaded_video(uploaded_file.name, file_bytes, uploaded_file.type) as (temp_path, info):
-                from modules.video_frames import probe_video, calculate_sample_timestamps, temporary_extracted_frames, select_preview_frames, VideoFramesError
+                from modules.video_frames import probe_video, calculate_sample_timestamps, temporary_extracted_frames, select_preview_frames, get_common_frame_dimensions, VideoFramesError
 
                 st.markdown("### Datei-Informationen")
                 st.write(f"**Dateiname:** `{info.original_filename}`")
@@ -1052,6 +1052,10 @@ elif navigation == "8. Video-Import":
 
                     with temporary_extracted_frames(temp_path, timestamps) as frames:
                         preview_frames = select_preview_frames(frames)
+                        
+                        common_w, common_h = get_common_frame_dimensions(preview_frames)
+                        if common_w != meta.width or common_h != meta.height:
+                            st.write(f"**Extrahierte Frame-Auflösung:** {common_w}x{common_h}")
 
                         st.markdown("### Scannerbereich festlegen")
                         st.info("Eine automatische Scannererkennung und OCR sind noch nicht aktiv. Der relevante Scannerbereich wird derzeit manuell kalibriert.")
@@ -1074,7 +1078,7 @@ elif navigation == "8. Video-Import":
                             from modules.video_roi import NormalizedROI, temporary_roi_crops, VideoROIError
                             try:
                                 roi = NormalizedROI(roi_left / 100.0, roi_top / 100.0, roi_right / 100.0, roi_bottom / 100.0)
-                                with temporary_roi_crops(preview_frames, roi, meta.width, meta.height) as crops:
+                                with temporary_roi_crops(preview_frames, roi) as crops:
                                     st.markdown("### Frame-Vorschau")
                                     cols = st.columns(3)
                                     for i, crop in enumerate(crops):

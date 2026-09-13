@@ -297,17 +297,21 @@ class TestVideoFramesExtraction(unittest.TestCase):
         timestamps = [0.0, 0.5, 1.0]
 
         def side_effect(cmd, **kwargs):
-            out_path = cmd[-1]
-            with open(out_path, "wb") as f:
-                f.write(b"fake jpeg data")
-            return MagicMock(returncode=0)
+            if cmd[0] == "ffmpeg":
+                out_path = cmd[-1]
+                with open(out_path, "wb") as f:
+                    f.write(b"fake jpeg data")
+                return MagicMock(returncode=0, stdout='{"streams": [{"width": 1920, "height": 1080}]}')
+            elif cmd[0] == "ffprobe":
+                return MagicMock(returncode=0, stdout='{"streams": [{"width": 1920, "height": 1080}]}')
+            return MagicMock(returncode=0, stdout='{"streams": [{"width": 1920, "height": 1080}]}')
 
         mock_run.side_effect = side_effect
 
         with patch('modules.video_frames.tempfile.mkdtemp', side_effect=self.patched_mkdtemp):
             with temporary_extracted_frames("fake.mp4", timestamps) as frames:
                 self.assertEqual(len(frames), 3)
-                self.assertEqual(mock_run.call_count, 3)
+                self.assertEqual(mock_run.call_count, 6)
                 for i, f in enumerate(frames):
                     self.assertEqual(f.sequence_index, i)
                     self.assertEqual(f.timestamp_seconds, timestamps[i])
@@ -318,7 +322,7 @@ class TestVideoFramesExtraction(unittest.TestCase):
     def test_u_files_exist_in_context(self, mock_run):
         def side_effect(cmd, **kwargs):
             with open(cmd[-1], "wb") as f: f.write(b"data")
-            return MagicMock(returncode=0)
+            return MagicMock(returncode=0, stdout='{"streams": [{"width": 1920, "height": 1080}]}')
         mock_run.side_effect = side_effect
 
         with patch('modules.video_frames.tempfile.mkdtemp', side_effect=self.patched_mkdtemp):
@@ -329,7 +333,7 @@ class TestVideoFramesExtraction(unittest.TestCase):
     def test_v_files_removed_after_context(self, mock_run):
         def side_effect(cmd, **kwargs):
             with open(cmd[-1], "wb") as f: f.write(b"data")
-            return MagicMock(returncode=0)
+            return MagicMock(returncode=0, stdout='{"streams": [{"width": 1920, "height": 1080}]}')
         mock_run.side_effect = side_effect
 
         with patch('modules.video_frames.tempfile.mkdtemp', side_effect=self.patched_mkdtemp):
@@ -367,7 +371,7 @@ class TestVideoFramesExtraction(unittest.TestCase):
 
     @patch('modules.video_frames.subprocess.run')
     def test_z_output_missing(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0) # But file is not created
+        mock_run.side_effect = lambda cmd, **k: MagicMock(returncode=0, stdout='{"streams": [{"width": 1920, "height": 1080}]}') # But file is not created
         with patch('modules.video_frames.tempfile.mkdtemp', side_effect=self.patched_mkdtemp):
             with self.assertRaises(VideoFramesError):
                 with temporary_extracted_frames("fake.mp4", [0.0]) as frames:
@@ -378,7 +382,7 @@ class TestVideoFramesExtraction(unittest.TestCase):
     def test_aa_output_empty(self, mock_run):
         def side_effect(cmd, **kwargs):
             with open(cmd[-1], "wb") as f: pass # Empty
-            return MagicMock(returncode=0)
+            return MagicMock(returncode=0, stdout='{"streams": [{"width": 1920, "height": 1080}]}')
         mock_run.side_effect = side_effect
         with patch('modules.video_frames.tempfile.mkdtemp', side_effect=self.patched_mkdtemp):
             with self.assertRaises(VideoFramesError):
@@ -403,24 +407,24 @@ class TestVideoFramesExtraction(unittest.TestCase):
         # diese API kennt keine Videodauer.
         def side_effect(cmd, **kwargs):
             with open(cmd[-1], "wb") as f: f.write(b"data")
-            return MagicMock(returncode=0)
+            return MagicMock(returncode=0, stdout='{"streams": [{"width": 1920, "height": 1080}]}')
         mock_run.side_effect = side_effect
 
         with patch('modules.video_frames.tempfile.mkdtemp', side_effect=self.patched_mkdtemp):
             with temporary_extracted_frames("fake.mp4", [9999.0]) as frames:
                 self.assertEqual(frames[0].timestamp_seconds, 9999.0)
-                cmd = mock_run.call_args.args[0]
-                self.assertIn("9999.0", cmd)
+                found = any("9999.0" in c.args[0] for c in mock_run.call_args_list)
+                self.assertTrue(found)
                 kwargs = mock_run.call_args.kwargs
                 self.assertFalse(kwargs.get("shell", False))
                 self.assertIn("timeout", kwargs)
-                self.assertEqual(cmd[0], "ffmpeg")
+                self.assertEqual(mock_run.call_args_list[0].args[0][0], "ffmpeg")
 
     @patch('modules.video_frames.subprocess.run')
     def test_ae_foreign_file_protected(self, mock_run):
         def side_effect(cmd, **kwargs):
             with open(cmd[-1], "wb") as f: f.write(b"data")
-            return MagicMock(returncode=0)
+            return MagicMock(returncode=0, stdout='{"streams": [{"width": 1920, "height": 1080}]}')
         mock_run.side_effect = side_effect
 
         foreign_path = os.path.join(self.temp_dir, "foreign.jpg")
@@ -440,7 +444,7 @@ class TestVideoFramesExtraction(unittest.TestCase):
     def test_af_primary_error_and_cleanup_error(self, mock_rmtree, mock_run):
         def side_effect(cmd, **kwargs):
             with open(cmd[-1], "wb") as f: f.write(b"data")
-            return MagicMock(returncode=0)
+            return MagicMock(returncode=0, stdout='{"streams": [{"width": 1920, "height": 1080}]}')
         mock_run.side_effect = side_effect
         mock_rmtree.side_effect = OSError("cleanup error")
 
@@ -461,7 +465,7 @@ class TestVideoFramesExtraction(unittest.TestCase):
     def test_ag_cleanup_error_after_success(self, mock_rmtree, mock_run):
         def side_effect(cmd, **kwargs):
             with open(cmd[-1], "wb") as f: f.write(b"data")
-            return MagicMock(returncode=0)
+            return MagicMock(returncode=0, stdout='{"streams": [{"width": 1920, "height": 1080}]}')
         mock_run.side_effect = side_effect
         cleanup_exception = OSError("cleanup error")
         mock_rmtree.side_effect = cleanup_exception
@@ -482,13 +486,13 @@ class TestPreviewSelection(unittest.TestCase):
         self.assertEqual(select_preview_frames([]), [])
 
     def test_select_preview_max_1(self):
-        frames = [ExtractedFrame(i, i*0.5, "path", 100, "hash") for i in range(5)]
+        frames = [ExtractedFrame(i, i*0.5, "path", 100, "hash", 1920, 1080) for i in range(5)]
         selected = select_preview_frames(frames, 1)
         self.assertEqual(len(selected), 1)
         self.assertEqual(selected[0].sequence_index, 0)
 
     def test_select_preview_max_invalid(self):
-        frames = [ExtractedFrame(i, i*0.5, "path", 100, "hash") for i in range(5)]
+        frames = [ExtractedFrame(i, i*0.5, "path", 100, "hash", 1920, 1080) for i in range(5)]
         with self.assertRaises(ValueError):
             select_preview_frames(frames, 0)
         with self.assertRaises(ValueError):
@@ -499,12 +503,12 @@ class TestPreviewSelection(unittest.TestCase):
             select_preview_frames(frames, True)
 
     def test_select_preview_less_than_max(self):
-        frames = [ExtractedFrame(i, i*0.5, "path", 100, "hash") for i in range(5)]
+        frames = [ExtractedFrame(i, i*0.5, "path", 100, "hash", 1920, 1080) for i in range(5)]
         selected = select_preview_frames(frames, 12)
         self.assertEqual(selected, frames)
 
     def test_select_preview_more_than_max(self):
-        frames = [ExtractedFrame(i, i*0.5, "path", 100, "hash") for i in range(100)]
+        frames = [ExtractedFrame(i, i*0.5, "path", 100, "hash", 1920, 1080) for i in range(100)]
         selected = select_preview_frames(frames, 12)
         self.assertEqual(len(selected), 12)
         self.assertEqual(selected[0].sequence_index, 0)
@@ -517,3 +521,105 @@ class TestPreviewSelection(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class TestImageProbing(unittest.TestCase):
+    @patch('modules.video_frames.subprocess.run')
+    def test_a_valid_portrait(self, mock_run):
+        from modules.video_frames import _probe_image_dimensions
+        mock_run.return_value = MagicMock(returncode=0, stdout='{"streams": [{"width": 2160, "height": 3840}]}')
+        w, h = _probe_image_dimensions("test.jpg")
+        self.assertEqual(w, 2160)
+        self.assertEqual(h, 3840)
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_b_valid_landscape(self, mock_run):
+        from modules.video_frames import _probe_image_dimensions
+        mock_run.return_value = MagicMock(returncode=0, stdout='{"streams": [{"width": 3840, "height": 2160}]}')
+        w, h = _probe_image_dimensions("test.jpg")
+        self.assertEqual(w, 3840)
+        self.assertEqual(h, 2160)
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_c_missing_dimensions(self, mock_run):
+        from modules.video_frames import _probe_image_dimensions, VideoFramesError
+        mock_run.return_value = MagicMock(returncode=0, stdout='{"streams": [{}]}')
+        with self.assertRaisesRegex(VideoFramesError, "Bildbreite aus ffprobe ist ungültig"):
+            _probe_image_dimensions("test.jpg")
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_d_zero_dimensions(self, mock_run):
+        from modules.video_frames import _probe_image_dimensions, VideoFramesError
+        mock_run.return_value = MagicMock(returncode=0, stdout='{"streams": [{"width": 0, "height": 1080}]}')
+        with self.assertRaisesRegex(VideoFramesError, "Bildbreite aus ffprobe ist ungültig"):
+            _probe_image_dimensions("test.jpg")
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_e_float_dimensions(self, mock_run):
+        from modules.video_frames import _probe_image_dimensions, VideoFramesError
+        mock_run.return_value = MagicMock(returncode=0, stdout='{"streams": [{"width": 1920.5, "height": 1080}]}')
+        with self.assertRaisesRegex(VideoFramesError, "Bildbreite aus ffprobe ist ungültig"):
+            _probe_image_dimensions("test.jpg")
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_f_bool_dimensions(self, mock_run):
+        from modules.video_frames import _probe_image_dimensions, VideoFramesError
+        mock_run.return_value = MagicMock(returncode=0, stdout='{"streams": [{"width": true, "height": 1080}]}')
+        with self.assertRaisesRegex(VideoFramesError, "Bildbreite aus ffprobe ist ungültig"):
+            _probe_image_dimensions("test.jpg")
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_g_nonzero_exit(self, mock_run):
+        from modules.video_frames import _probe_image_dimensions, VideoFramesError
+        import subprocess
+        mock_run.side_effect = subprocess.CalledProcessError(1, "ffprobe")
+        with self.assertRaisesRegex(VideoFramesError, "Fehler beim Lesen der Bilddimensionen"):
+            _probe_image_dimensions("test.jpg")
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_h_missing_ffprobe(self, mock_run):
+        from modules.video_frames import _probe_image_dimensions, VideoFramesError
+        mock_run.side_effect = FileNotFoundError()
+        with self.assertRaisesRegex(VideoFramesError, "nicht installiert"):
+            _probe_image_dimensions("test.jpg")
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_i_invalid_json(self, mock_run):
+        from modules.video_frames import _probe_image_dimensions, VideoFramesError
+        mock_run.return_value = MagicMock(returncode=0, stdout='invalid json')
+        with self.assertRaisesRegex(VideoFramesError, "Ungültiges JSON-Format"):
+            _probe_image_dimensions("test.jpg")
+
+    @patch('modules.video_frames.subprocess.run')
+    def test_j_subprocess_args(self, mock_run):
+        from modules.video_frames import _probe_image_dimensions
+        mock_run.return_value = MagicMock(returncode=0, stdout='{"streams": [{"width": 1920, "height": 1080}]}')
+        _probe_image_dimensions("test.jpg")
+        kwargs = mock_run.call_args.kwargs
+        self.assertTrue(kwargs.get("capture_output"))
+        self.assertTrue(kwargs.get("text"))
+        self.assertFalse(kwargs.get("shell"))
+        self.assertTrue(kwargs.get("check"))
+        self.assertEqual(kwargs.get("timeout"), 10)
+
+class TestCommonFrameDimensions(unittest.TestCase):
+    def test_valid(self):
+        from modules.video_frames import get_common_frame_dimensions, ExtractedFrame
+        frames = [
+            ExtractedFrame(0, 0.0, "p", 1, "h", 1920, 1080),
+            ExtractedFrame(1, 1.0, "p", 1, "h", 1920, 1080)
+        ]
+        self.assertEqual(get_common_frame_dimensions(frames), (1920, 1080))
+        
+    def test_inconsistent(self):
+        from modules.video_frames import get_common_frame_dimensions, ExtractedFrame, VideoFramesError
+        frames = [
+            ExtractedFrame(0, 0.0, "p", 1, "h", 1920, 1080),
+            ExtractedFrame(1, 1.0, "p", 1, "h", 1080, 1920)
+        ]
+        with self.assertRaisesRegex(VideoFramesError, "Inkonsistente Frame-Dimensionen"):
+            get_common_frame_dimensions(frames)
+            
+    def test_empty(self):
+        from modules.video_frames import get_common_frame_dimensions, VideoFramesError
+        with self.assertRaisesRegex(VideoFramesError, "Keine Frames übergeben"):
+            get_common_frame_dimensions([])

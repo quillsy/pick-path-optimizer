@@ -21,7 +21,7 @@ class TestCalibrationPairing(unittest.TestCase):
     def setUp(self):
         self.pixel_roi = PixelROI(10, 10, 50, 50)
         self.frames = [
-            ExtractedFrame(i, i * 1.5, f"frame_{i}.jpg", 100, f"hash_{i}")
+            ExtractedFrame(i, i * 1.5, f"frame_{i}.jpg", 100, f"hash_{i}", 1920, 1080)
             for i in range(10)
         ]
         self.crops = [
@@ -98,8 +98,8 @@ class TestCalibrationPairing(unittest.TestCase):
 
     def test_e_f_pairing_sort_order(self):
         # E. Timestamps reverse
-        f1 = ExtractedFrame(1, 10.0, "f1.jpg", 100, "h1")
-        f2 = ExtractedFrame(2, 5.0, "f2.jpg", 100, "h2")
+        f1 = ExtractedFrame(1, 10.0, "f1.jpg", 100, "h1", 1920, 1080)
+        f2 = ExtractedFrame(2, 5.0, "f2.jpg", 100, "h2", 1920, 1080)
         c1 = ROICrop(1, 10.0, "f1.jpg", "c1.jpg", self.pixel_roi, 50, "ch1")
         c2 = ROICrop(2, 5.0, "f2.jpg", "c2.jpg", self.pixel_roi, 50, "ch2")
         pairs = select_calibration_pairs([f1, f2], [c1, c2])
@@ -107,7 +107,7 @@ class TestCalibrationPairing(unittest.TestCase):
         self.assertEqual(pairs[1].sequence_index, 1)
 
         # F. Same timestamp, sequence tie-breaker
-        f3 = ExtractedFrame(3, 5.0, "f3.jpg", 100, "h3")
+        f3 = ExtractedFrame(3, 5.0, "f3.jpg", 100, "h3", 1920, 1080)
         c3 = ROICrop(3, 5.0, "f3.jpg", "c3.jpg", self.pixel_roi, 50, "ch3")
         pairs2 = select_calibration_pairs([f3, f2], [c3, c2])
         self.assertEqual(pairs2[0].sequence_index, 2)

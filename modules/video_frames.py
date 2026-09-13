@@ -32,6 +32,8 @@ class ExtractedFrame:
     path: str
     size_bytes: int
     sha256: str
+    width: int
+    height: int
 
 class VideoFramesError(Exception):
     pass
@@ -217,6 +219,67 @@ def select_preview_frames(frames: List[ExtractedFrame], max_preview: int = MAX_P
 
     return selected
 
+
+def get_common_frame_dimensions(frames: List[ExtractedFrame]) -> tuple[int, int]:
+    if not frames:
+        raise VideoFramesError("Keine Frames übergeben.")
+    w = frames[0].width
+    h = frames[0].height
+    if type(w) is not int or type(h) is not int or w <= 0 or h <= 0:
+        raise VideoFramesError("Ungültige Frame-Dimensionen.")
+    for f in frames[1:]:
+        if f.width != w or f.height != h:
+            raise VideoFramesError(f"Inkonsistente Frame-Dimensionen: {w}x{h} vs {f.width}x{f.height}.")
+    return w, h
+
+def _probe_image_dimensions(frame_path: str) -> tuple[int, int]:
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", 
+                "-v", "error", 
+                "-select_streams", "v:0", 
+                "-show_entries", "stream=width,height", 
+                "-of", "json", 
+                frame_path
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            shell=False,
+            check=True
+        )
+    except FileNotFoundError:
+        raise VideoFramesError("ffprobe ist nicht installiert oder nicht im PATH.")
+    except subprocess.TimeoutExpired:
+        raise VideoFramesError("Zeitüberschreitung beim Ermitteln der Bilddimensionen via ffprobe.")
+    except subprocess.CalledProcessError as e:
+        raise VideoFramesError(f"ffprobe Fehler beim Lesen der Bilddimensionen (Code {e.returncode}).")
+        
+    try:
+        data = json.loads(result.stdout)
+    except Exception:
+        raise VideoFramesError("Ungültiges JSON-Format in ffprobe-Ausgabe.")
+        
+    streams = data.get("streams", [])
+    if type(streams) is not list or len(streams) == 0:
+        raise VideoFramesError("Kein Video-Stream im extrahierten Frame gefunden.")
+        
+    stream = streams[0]
+    if type(stream) is not dict:
+        raise VideoFramesError("Ungültige Stream-Information im Frame.")
+        
+    width = stream.get("width")
+    height = stream.get("height")
+    
+    if type(width) is not int or type(width) is bool or width <= 0:
+        raise VideoFramesError("Bildbreite aus ffprobe ist ungültig (kein positiver Integer).")
+        
+    if type(height) is not int or type(height) is bool or height <= 0:
+        raise VideoFramesError("Bildhöhe aus ffprobe ist ungültig (kein positiver Integer).")
+        
+    return width, height
+
 @contextmanager
 def temporary_extracted_frames(video_path: str, timestamps: List[float]) -> Iterator[List[ExtractedFrame]]:
     """
@@ -277,12 +340,16 @@ def temporary_extracted_frames(video_path: str, timestamps: List[float]) -> Iter
                 for chunk in iter(lambda: f.read(4096), b""):
                     sha256_hash.update(chunk)
 
+            img_width, img_height = _probe_image_dimensions(out_path)
+
             frames.append(ExtractedFrame(
                 sequence_index=idx,
                 timestamp_seconds=ts,
                 path=out_path,
                 size_bytes=size,
-                sha256=sha256_hash.hexdigest()
+                sha256=sha256_hash.hexdigest(),
+                width=img_width,
+                height=img_height
             ))
 
         try:

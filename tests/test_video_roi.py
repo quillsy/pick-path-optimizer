@@ -120,9 +120,9 @@ class TestROICropping(unittest.TestCase):
     def setUp(self):
         self.roi = NormalizedROI(0.0, 0.0, 1.0, 1.0)
         self.frames = [
-            ExtractedFrame(0, 0.0, "frame0.jpg", 100, "hash0"),
-            ExtractedFrame(1, 1.5, "frame1.jpg", 100, "hash1"),
-            ExtractedFrame(2, 3.0, "frame2.jpg", 100, "hash2"),
+            ExtractedFrame(0, 0.0, "frame0.jpg", 100, "hash0", 1920, 1080),
+            ExtractedFrame(1, 1.5, "frame1.jpg", 100, "hash1", 1920, 1080),
+            ExtractedFrame(2, 3.0, "frame2.jpg", 100, "hash2", 1920, 1080),
         ]
         self.temp_dir = tempfile.mkdtemp(prefix="test_roi_crops_")
         self.patched_mkdtemp = patch('modules.video_roi.tempfile.mkdtemp').start()
@@ -149,7 +149,7 @@ class TestROICropping(unittest.TestCase):
             return MagicMock(returncode=0)
         mock_run.side_effect = side_effect
 
-        with temporary_roi_crops(self.frames, self.roi, 100, 100) as crops:
+        with temporary_roi_crops(self.frames, self.roi) as crops:
             self.assertEqual(len(crops), 3)
             self.assertEqual(mock_run.call_count, 3)
             for i, crop in enumerate(crops):
@@ -167,9 +167,9 @@ class TestROICropping(unittest.TestCase):
         mock_run.side_effect = side_effect
 
         roi = NormalizedROI(0.25, 0.25, 0.75, 0.75)
-        with temporary_roi_crops([self.frames[0]], roi, 1000, 1000) as crops:
+        with temporary_roi_crops([self.frames[0]], roi) as crops:
             cmd = mock_run.call_args.args[0]
-            self.assertIn("crop=500:500:250:250", cmd)
+            self.assertIn("crop=960:540:480:270", cmd)
 
     @patch('modules.video_roi.subprocess.run')
     def test_u_subprocess_args(self, mock_run):
@@ -178,7 +178,7 @@ class TestROICropping(unittest.TestCase):
             return MagicMock(returncode=0)
         mock_run.side_effect = side_effect
 
-        with temporary_roi_crops([self.frames[0]], self.roi, 100, 100) as crops:
+        with temporary_roi_crops([self.frames[0]], self.roi) as crops:
             args = mock_run.call_args.args[0]
             kwargs = mock_run.call_args.kwargs
             self.assertIsInstance(args, list)
@@ -191,7 +191,7 @@ class TestROICropping(unittest.TestCase):
             return MagicMock(returncode=0)
         mock_run.side_effect = side_effect
 
-        with temporary_roi_crops([self.frames[0]], self.roi, 100, 100) as crops:
+        with temporary_roi_crops([self.frames[0]], self.roi) as crops:
             kwargs = mock_run.call_args.kwargs
             self.assertIn('timeout', kwargs)
 
@@ -199,7 +199,7 @@ class TestROICropping(unittest.TestCase):
     def test_w_output_missing(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0)
         with self.assertRaises(VideoROIError):
-            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+            with temporary_roi_crops([self.frames[0]], self.roi):
                 pass
         self.assertFalse(os.path.exists(self.temp_dir))
 
@@ -210,7 +210,7 @@ class TestROICropping(unittest.TestCase):
             return MagicMock(returncode=0)
         mock_run.side_effect = side_effect
         with self.assertRaises(VideoROIError):
-            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+            with temporary_roi_crops([self.frames[0]], self.roi):
                 pass
 
     @patch('modules.video_roi.subprocess.run')
@@ -218,14 +218,14 @@ class TestROICropping(unittest.TestCase):
         import subprocess
         mock_run.side_effect = subprocess.CalledProcessError(1, "ffmpeg")
         with self.assertRaises(VideoROIError):
-            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+            with temporary_roi_crops([self.frames[0]], self.roi):
                 pass
 
     @patch('modules.video_roi.subprocess.run')
     def test_z_ffmpeg_missing(self, mock_run):
         mock_run.side_effect = FileNotFoundError()
         with self.assertRaises(VideoROIError):
-            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+            with temporary_roi_crops([self.frames[0]], self.roi):
                 pass
 
     @patch('modules.video_roi.subprocess.run')
@@ -233,7 +233,7 @@ class TestROICropping(unittest.TestCase):
         import subprocess
         mock_run.side_effect = subprocess.TimeoutExpired("ffmpeg", 30)
         with self.assertRaises(VideoROIError):
-            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+            with temporary_roi_crops([self.frames[0]], self.roi):
                 pass
 
     @patch('modules.video_roi.subprocess.run')
@@ -243,7 +243,7 @@ class TestROICropping(unittest.TestCase):
             return MagicMock(returncode=0)
         mock_run.side_effect = side_effect
 
-        with temporary_roi_crops([self.frames[0]], self.roi, 100, 100) as crops:
+        with temporary_roi_crops([self.frames[0]], self.roi) as crops:
             self.assertTrue(os.path.exists(crops[0].crop_path))
 
     @patch('modules.video_roi.subprocess.run')
@@ -254,7 +254,7 @@ class TestROICropping(unittest.TestCase):
         mock_run.side_effect = side_effect
 
         crop_path = None
-        with temporary_roi_crops([self.frames[0]], self.roi, 100, 100) as crops:
+        with temporary_roi_crops([self.frames[0]], self.roi) as crops:
             crop_path = crops[0].crop_path
 
         self.assertFalse(os.path.exists(crop_path))
@@ -280,7 +280,7 @@ class TestROICropping(unittest.TestCase):
         old_path = self.frames[0].path
         object.__setattr__(self.frames[0], 'path', frame_path) # ExtractedFrame is frozen
 
-        with temporary_roi_crops([self.frames[0]], self.roi, 100, 100) as crops:
+        with temporary_roi_crops([self.frames[0]], self.roi) as crops:
             pass
 
         self.assertTrue(os.path.exists(frame_path))
@@ -299,7 +299,7 @@ class TestROICropping(unittest.TestCase):
         with open(foreign_path, 'wb') as fp:
             fp.write(b"foreign")
 
-        with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+        with temporary_roi_crops([self.frames[0]], self.roi):
             pass
 
         self.assertTrue(os.path.exists(foreign_path))
@@ -315,7 +315,7 @@ class TestROICropping(unittest.TestCase):
 
         with patch('modules.video_roi.shutil.rmtree', side_effect=MockException):
             try:
-                with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+                with temporary_roi_crops([self.frames[0]], self.roi):
                     pass
             except Exception as e:
                 caught = e
@@ -332,7 +332,7 @@ class TestROICropping(unittest.TestCase):
 
         with patch('modules.video_roi.shutil.rmtree', side_effect=MockException):
             try:
-                with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+                with temporary_roi_crops([self.frames[0]], self.roi):
                     pass
             except Exception as e:
                 caught = e
@@ -354,7 +354,7 @@ class TestROICropping(unittest.TestCase):
         caught = None
         with patch('modules.video_roi.shutil.rmtree', side_effect=cleanup_error):
             try:
-                with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+                with temporary_roi_crops([self.frames[0]], self.roi):
                     raise primary_error
             except BaseException as e:
                 caught = e
@@ -379,7 +379,7 @@ class TestROICropping(unittest.TestCase):
         caught = None
         with patch('modules.video_roi.shutil.rmtree', side_effect=cleanup_error):
             try:
-                with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+                with temporary_roi_crops([self.frames[0]], self.roi):
                     pass
             except BaseException as e:
                 caught = e
@@ -395,7 +395,7 @@ class TestROICropping(unittest.TestCase):
         import subprocess
         mock_run.side_effect = subprocess.CalledProcessError(234, "ffmpeg", stderr="Invalid argument")
         with self.assertRaisesRegex(VideoROIError, r"Code 234.*Invalid argument"):
-            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+            with temporary_roi_crops([self.frames[0]], self.roi):
                 pass
 
     @patch('modules.video_roi.subprocess.run')
@@ -404,7 +404,7 @@ class TestROICropping(unittest.TestCase):
         # Leeres stderr testen (sollte keinen Doppelpunkt erzeugen)
         mock_run.side_effect = subprocess.CalledProcessError(234, "ffmpeg", stderr="")
         with self.assertRaisesRegex(VideoROIError, r"^ffmpeg Fehler beim Croppen \(Code 234\)\.$"):
-            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+            with temporary_roi_crops([self.frames[0]], self.roi):
                 pass
 
     @patch('modules.video_roi.subprocess.run')
@@ -413,7 +413,7 @@ class TestROICropping(unittest.TestCase):
         frame_path = self.frames[0].path
         mock_run.side_effect = subprocess.CalledProcessError(1, "ffmpeg", stderr=f"Fehler in {frame_path} aufgetreten")
         with self.assertRaises(VideoROIError) as ctx:
-            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+            with temporary_roi_crops([self.frames[0]], self.roi):
                 pass
         self.assertNotIn(frame_path, str(ctx.exception))
         self.assertIn("<source-frame>", str(ctx.exception))
@@ -430,7 +430,7 @@ class TestROICropping(unittest.TestCase):
         mock_run.side_effect = side_effect
 
         with self.assertRaises(VideoROIError) as ctx:
-            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+            with temporary_roi_crops([self.frames[0]], self.roi):
                 pass
 
         # The exact crop path shouldn't be in the error, but the placeholder should.
@@ -448,7 +448,7 @@ class TestROICropping(unittest.TestCase):
             raise subprocess.CalledProcessError(1, "ffmpeg", stderr=f"No space in {temp_dir} left")
         mock_run.side_effect = side_effect
         with self.assertRaises(VideoROIError) as ctx:
-            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+            with temporary_roi_crops([self.frames[0]], self.roi):
                 pass
         self.assertIn("<temp-dir>", str(ctx.exception))
 
@@ -458,7 +458,7 @@ class TestROICropping(unittest.TestCase):
         long_err = "X" * 3000
         mock_run.side_effect = subprocess.CalledProcessError(1, "ffmpeg", stderr=long_err)
         with self.assertRaises(VideoROIError) as ctx:
-            with temporary_roi_crops([self.frames[0]], self.roi, 100, 100):
+            with temporary_roi_crops([self.frames[0]], self.roi):
                 pass
         msg = str(ctx.exception)
         self.assertIn("[gekürzt]", msg)
@@ -471,10 +471,29 @@ class TestROICropping(unittest.TestCase):
             return MagicMock(returncode=0)
         mock_run.side_effect = side_effect
 
-        with temporary_roi_crops([self.frames[0]], self.roi, 100, 100) as crops:
+        with temporary_roi_crops([self.frames[0]], self.roi) as crops:
             kwargs = mock_run.call_args.kwargs
             self.assertTrue(kwargs.get('capture_output'))
             self.assertTrue(kwargs.get('text'))
             self.assertFalse(kwargs.get('shell'))
             self.assertTrue(kwargs.get('check'))
             self.assertIn('timeout', kwargs)
+
+    @patch('modules.video_roi.subprocess.run')
+    def test_aq_rotation_regression_crop_dimensions(self, mock_run):
+        # Frame extrahiert mit Rotation: 2160x3840 statt 3840x2160
+        f = ExtractedFrame(0, 0.0, "frame.jpg", 100, "hash", 2160, 3840)
+        roi = NormalizedROI(0.0, 0.0, 1.0, 1.0) # Fullscreen
+        
+        def side_effect(cmd, **kwargs):
+            with open(cmd[-1], "wb") as f_out: f_out.write(b"fakecrop")
+            return MagicMock(returncode=0)
+        mock_run.side_effect = side_effect
+        
+        with temporary_roi_crops([f], roi) as crops:
+            args = mock_run.call_args.args[0]
+            # Expecting exactly crop=2160:3840:0:0
+            self.assertIn("crop=2160:3840:0:0", args)
+            
+            self.assertEqual(crops[0].pixel_roi.width, 2160)
+            self.assertEqual(crops[0].pixel_roi.height, 3840)
