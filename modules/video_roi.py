@@ -4,6 +4,7 @@ import hashlib
 import tempfile
 import shutil
 import subprocess
+from PIL import Image, ImageOps, UnidentifiedImageError
 from dataclasses import dataclass
 from typing import List, Iterator
 from contextlib import contextmanager
@@ -12,24 +13,6 @@ from modules.video_frames import ExtractedFrame
 
 class VideoROIError(Exception):
     pass
-
-MAX_FFMPEG_ERROR_CHARS = 2000
-
-def _sanitize_ffmpeg_error(stderr_text: str, source_frame_path: str, crop_path: str, temp_dir: str) -> str:
-    if not stderr_text:
-        return ""
-    text = stderr_text.strip()
-    if source_frame_path:
-        text = text.replace(source_frame_path, "<source-frame>")
-    if crop_path:
-        text = text.replace(crop_path, "<crop-output>")
-    if temp_dir:
-        text = text.replace(temp_dir, "<temp-dir>")
-
-    if len(text) > MAX_FFMPEG_ERROR_CHARS:
-        text = text[:MAX_FFMPEG_ERROR_CHARS] + "... [gekürzt]"
-
-    return text
 
 @dataclass(frozen=True)
 class NormalizedROI:
@@ -120,41 +103,34 @@ def temporary_roi_crops(
     try:
         crops = []
         for frame in frames:
-            pixel_roi = roi_to_pixels(roi, frame.width, frame.height)
             crop_filename = f"crop_{frame.sequence_index:04d}.jpg"
             crop_path = os.path.join(temp_dir, crop_filename)
 
+            if not os.path.exists(frame.path):
+                raise VideoROIError("Quellbild existiert nicht.")
+
             try:
-                subprocess.run(
-                    [
-                        "ffmpeg",
-                        "-v", "error",
-                        "-i", frame.path,
-                        "-vf", f"crop={pixel_roi.width}:{pixel_roi.height}:{pixel_roi.x}:{pixel_roi.y}",
-                        "-frames:v", "1",
-                        "-y",
-                        crop_path
-                    ],
-                    shell=False,
-                    check=True,
-                    timeout=30,
-                    capture_output=True,
-                    text=True
-                )
-            except FileNotFoundError:
-                raise VideoROIError("ffmpeg ist nicht installiert oder nicht im PATH.")
-            except subprocess.TimeoutExpired:
-                raise VideoROIError("ffmpeg Zeitüberschreitung beim Croppen.")
-            except subprocess.CalledProcessError as e:
-                stderr_text = (e.stderr or "").strip()
-                sanitized = _sanitize_ffmpeg_error(stderr_text, frame.path, crop_path, temp_dir)
-                if sanitized:
-                    raise VideoROIError(f"ffmpeg Fehler beim Croppen (Code {e.returncode}): {sanitized}")
-                else:
-                    raise VideoROIError(f"ffmpeg Fehler beim Croppen (Code {e.returncode}).")
+                with Image.open(frame.path) as src:
+                    oriented = ImageOps.exif_transpose(src)
+                    if oriented.mode in ('RGBA', 'P', 'LA', 'CMYK'):
+                        oriented = oriented.convert('RGB')
+                    
+                    pixel_roi = roi_to_pixels(roi, oriented.width, oriented.height)
+                    
+                    left = pixel_roi.x
+                    top = pixel_roi.y
+                    right = pixel_roi.x + pixel_roi.width
+                    bottom = pixel_roi.y + pixel_roi.height
+                    
+                    cropped = oriented.crop((left, top, right, bottom))
+                    cropped.save(crop_path, format="JPEG", quality=95)
+            except UnidentifiedImageError:
+                raise VideoROIError("Pillow konnte Bild nicht identifizieren.")
+            except OSError as e:
+                raise VideoROIError(f"Pillow Fehler beim Verarbeiten des Bildes: {str(e)}")
 
             if not os.path.exists(crop_path):
-                raise VideoROIError("Crop-Datei wurde von ffmpeg nicht erstellt.")
+                raise VideoROIError("Crop-Datei wurde von Pillow nicht erstellt.")
 
             size = os.path.getsize(crop_path)
             if size == 0:

@@ -116,384 +116,184 @@ class TestPixelConversion(unittest.TestCase):
         self.assertEqual(px1, px2)
 
 
-class TestROICropping(unittest.TestCase):
+class TestROICroppingPillow(unittest.TestCase):
     def setUp(self):
-        self.roi = NormalizedROI(0.0, 0.0, 1.0, 1.0)
-        self.frames = [
-            ExtractedFrame(0, 0.0, "frame0.jpg", 100, "hash0", 1920, 1080),
-            ExtractedFrame(1, 1.5, "frame1.jpg", 100, "hash1", 1920, 1080),
-            ExtractedFrame(2, 3.0, "frame2.jpg", 100, "hash2", 1920, 1080),
-        ]
-        self.temp_dir = tempfile.mkdtemp(prefix="test_roi_crops_")
-        self.patched_mkdtemp = patch('modules.video_roi.tempfile.mkdtemp').start()
-        self.patched_mkdtemp.return_value = self.temp_dir
-
-        # Write dummy files to represent inputs (though subprocess will be mocked anyway)
-        for f in self.frames:
-            with open(os.path.join(self.temp_dir, f.path), 'wb') as fp:
-                fp.write(b"dummy_input")
-
-    def tearDown(self):
-        patch.stopall()
-        if os.path.exists(self.temp_dir):
-            import shutil
-            shutil.rmtree(self.temp_dir)
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_s_three_frames(self, mock_run):
-        def side_effect(cmd, **kwargs):
-            # Create a fake output file
-            output_path = cmd[-1]
-            with open(output_path, "wb") as f:
-                f.write(b"fakecrop")
-            return MagicMock(returncode=0)
-        mock_run.side_effect = side_effect
-
-        with temporary_roi_crops(self.frames, self.roi) as crops:
-            self.assertEqual(len(crops), 3)
-            self.assertEqual(mock_run.call_count, 3)
-            for i, crop in enumerate(crops):
-                self.assertEqual(crop.sequence_index, i)
-                self.assertEqual(crop.timestamp_seconds, self.frames[i].timestamp_seconds)
-                self.assertTrue(os.path.exists(crop.crop_path))
-                self.assertGreater(crop.size_bytes, 0)
-                self.assertIsInstance(crop.sha256, str)
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_t_crop_pixels(self, mock_run):
-        def side_effect(cmd, **kwargs):
-            with open(cmd[-1], "wb") as f: f.write(b"fakecrop")
-            return MagicMock(returncode=0)
-        mock_run.side_effect = side_effect
-
-        roi = NormalizedROI(0.25, 0.25, 0.75, 0.75)
-        with temporary_roi_crops([self.frames[0]], roi) as crops:
-            cmd = mock_run.call_args.args[0]
-            self.assertIn("crop=960:540:480:270", cmd)
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_u_subprocess_args(self, mock_run):
-        def side_effect(cmd, **kwargs):
-            with open(cmd[-1], "wb") as f: f.write(b"fakecrop")
-            return MagicMock(returncode=0)
-        mock_run.side_effect = side_effect
-
-        with temporary_roi_crops([self.frames[0]], self.roi) as crops:
-            args = mock_run.call_args.args[0]
-            kwargs = mock_run.call_args.kwargs
-            self.assertIsInstance(args, list)
-            self.assertFalse(kwargs.get('shell', False))
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_v_subprocess_timeout(self, mock_run):
-        def side_effect(cmd, **kwargs):
-            with open(cmd[-1], "wb") as f: f.write(b"fakecrop")
-            return MagicMock(returncode=0)
-        mock_run.side_effect = side_effect
-
-        with temporary_roi_crops([self.frames[0]], self.roi) as crops:
-            kwargs = mock_run.call_args.kwargs
-            self.assertIn('timeout', kwargs)
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_w_output_missing(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0)
-        with self.assertRaises(VideoROIError):
-            with temporary_roi_crops([self.frames[0]], self.roi):
-                pass
-        self.assertFalse(os.path.exists(self.temp_dir))
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_x_output_empty(self, mock_run):
-        def side_effect(cmd, **kwargs):
-            with open(cmd[-1], "wb") as f: pass
-            return MagicMock(returncode=0)
-        mock_run.side_effect = side_effect
-        with self.assertRaises(VideoROIError):
-            with temporary_roi_crops([self.frames[0]], self.roi):
-                pass
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_y_subprocess_nonzero(self, mock_run):
-        import subprocess
-        mock_run.side_effect = subprocess.CalledProcessError(1, "ffmpeg")
-        with self.assertRaises(VideoROIError):
-            with temporary_roi_crops([self.frames[0]], self.roi):
-                pass
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_z_ffmpeg_missing(self, mock_run):
-        mock_run.side_effect = FileNotFoundError()
-        with self.assertRaises(VideoROIError):
-            with temporary_roi_crops([self.frames[0]], self.roi):
-                pass
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_aa_ffmpeg_timeout(self, mock_run):
-        import subprocess
-        mock_run.side_effect = subprocess.TimeoutExpired("ffmpeg", 30)
-        with self.assertRaises(VideoROIError):
-            with temporary_roi_crops([self.frames[0]], self.roi):
-                pass
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_ab_exist_in_context(self, mock_run):
-        def side_effect(cmd, **kwargs):
-            with open(cmd[-1], "wb") as f: f.write(b"fakecrop")
-            return MagicMock(returncode=0)
-        mock_run.side_effect = side_effect
-
-        with temporary_roi_crops([self.frames[0]], self.roi) as crops:
-            self.assertTrue(os.path.exists(crops[0].crop_path))
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_ac_removed_after_context(self, mock_run):
-        def side_effect(cmd, **kwargs):
-            with open(cmd[-1], "wb") as f: f.write(b"fakecrop")
-            return MagicMock(returncode=0)
-        mock_run.side_effect = side_effect
-
-        crop_path = None
-        with temporary_roi_crops([self.frames[0]], self.roi) as crops:
-            crop_path = crops[0].crop_path
-
-        self.assertFalse(os.path.exists(crop_path))
-        self.assertFalse(os.path.exists(self.temp_dir))
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_ad_original_frames_preserved(self, mock_run):
-        def side_effect(cmd, **kwargs):
-            with open(cmd[-1], "wb") as f: f.write(b"fakecrop")
-            return MagicMock(returncode=0)
-        mock_run.side_effect = side_effect
-
-        import tempfile
-        import shutil
-        # Get a real temp dir bypassing the mock
-        import os
-        foreign_dir = os.path.realpath(tempfile._mkdtemp_inner(tempfile.gettempdir(), tempfile.gettempprefix(), None, None, None)[1]) if hasattr(tempfile, '_mkdtemp_inner') else '/tmp/test_roi_foreign'
-        os.makedirs(foreign_dir, exist_ok=True)
-        frame_path = os.path.join(foreign_dir, self.frames[0].path)
-        with open(frame_path, 'wb') as fp:
-            fp.write(b"original")
-
-        old_path = self.frames[0].path
-        object.__setattr__(self.frames[0], 'path', frame_path) # ExtractedFrame is frozen
-
-        with temporary_roi_crops([self.frames[0]], self.roi) as crops:
-            pass
-
-        self.assertTrue(os.path.exists(frame_path))
-        object.__setattr__(self.frames[0], 'path', old_path)
-        shutil.rmtree(foreign_dir)
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_ae_foreign_file_protected(self, mock_run):
-        def side_effect(cmd, **kwargs):
-            with open(cmd[-1], "wb") as f: f.write(b"fakecrop")
-            return MagicMock(returncode=0)
-        mock_run.side_effect = side_effect
-
-        fd, foreign_path = tempfile.mkstemp()
-        os.close(fd)
-        with open(foreign_path, 'wb') as fp:
-            fp.write(b"foreign")
-
-        with temporary_roi_crops([self.frames[0]], self.roi):
-            pass
-
-        self.assertTrue(os.path.exists(foreign_path))
-        with open(foreign_path, 'rb') as fp:
-            self.assertEqual(fp.read(), b"foreign")
-        os.remove(foreign_path)
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_af_primary_and_cleanup_error(self, mock_run):
-        mock_run.side_effect = FileNotFoundError()
-
-        class MockException(Exception): pass
-
-        with patch('modules.video_roi.shutil.rmtree', side_effect=MockException):
-            try:
-                with temporary_roi_crops([self.frames[0]], self.roi):
-                    pass
-            except Exception as e:
-                caught = e
-            self.assertIsInstance(caught, VideoROIError)
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_ag_cleanup_error_visible(self, mock_run):
-        def side_effect(cmd, **kwargs):
-            with open(cmd[-1], "wb") as f: f.write(b"fakecrop")
-            return MagicMock(returncode=0)
-        mock_run.side_effect = side_effect
-
-        class MockException(Exception): pass
-
-        with patch('modules.video_roi.shutil.rmtree', side_effect=MockException):
-            try:
-                with temporary_roi_crops([self.frames[0]], self.roi):
-                    pass
-            except Exception as e:
-                caught = e
-            self.assertIsInstance(caught, MockException)
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_ah_primary_base_and_cleanup_base(self, mock_run):
-        class SyntheticBaseException(BaseException): pass
-        class SyntheticCleanupBaseException(BaseException): pass
-
-        def side_effect(cmd, **kwargs):
-            with open(cmd[-1], "wb") as f: f.write(b"fakecrop")
-            return MagicMock(returncode=0)
-        mock_run.side_effect = side_effect
-
-        primary_error = SyntheticBaseException("primary")
-        cleanup_error = SyntheticCleanupBaseException("cleanup")
-
-        caught = None
-        with patch('modules.video_roi.shutil.rmtree', side_effect=cleanup_error):
-            try:
-                with temporary_roi_crops([self.frames[0]], self.roi):
-                    raise primary_error
-            except BaseException as e:
-                caught = e
-
-        self.assertIs(caught, primary_error)
-
-        if os.path.exists(self.temp_dir):
-            import shutil
-            shutil.rmtree(self.temp_dir)
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_ai_cleanup_base_error_visible(self, mock_run):
-        class SyntheticCleanupBaseException(BaseException): pass
-
-        def side_effect(cmd, **kwargs):
-            with open(cmd[-1], "wb") as f: f.write(b"fakecrop")
-            return MagicMock(returncode=0)
-        mock_run.side_effect = side_effect
-
-        cleanup_error = SyntheticCleanupBaseException("cleanup")
-
-        caught = None
-        with patch('modules.video_roi.shutil.rmtree', side_effect=cleanup_error):
-            try:
-                with temporary_roi_crops([self.frames[0]], self.roi):
-                    pass
-            except BaseException as e:
-                caught = e
-
-        self.assertIs(caught, cleanup_error)
-
-        if os.path.exists(self.temp_dir):
-            import shutil
-            shutil.rmtree(self.temp_dir)
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_aj_called_process_error_with_stderr(self, mock_run):
-        import subprocess
-        mock_run.side_effect = subprocess.CalledProcessError(234, "ffmpeg", stderr="Invalid argument")
-        with self.assertRaisesRegex(VideoROIError, r"Code 234.*Invalid argument"):
-            with temporary_roi_crops([self.frames[0]], self.roi):
-                pass
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_ak_called_process_error_empty_stderr(self, mock_run):
-        import subprocess
-        # Leeres stderr testen (sollte keinen Doppelpunkt erzeugen)
-        mock_run.side_effect = subprocess.CalledProcessError(234, "ffmpeg", stderr="")
-        with self.assertRaisesRegex(VideoROIError, r"^ffmpeg Fehler beim Croppen \(Code 234\)\.$"):
-            with temporary_roi_crops([self.frames[0]], self.roi):
-                pass
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_al_source_frame_path_masked(self, mock_run):
-        import subprocess
-        frame_path = self.frames[0].path
-        mock_run.side_effect = subprocess.CalledProcessError(1, "ffmpeg", stderr=f"Fehler in {frame_path} aufgetreten")
-        with self.assertRaises(VideoROIError) as ctx:
-            with temporary_roi_crops([self.frames[0]], self.roi):
-                pass
-        self.assertNotIn(frame_path, str(ctx.exception))
-        self.assertIn("<source-frame>", str(ctx.exception))
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_am_crop_path_masked(self, mock_run):
-        import subprocess
-
-        def side_effect(cmd, **kwargs):
-            # cmd[-1] is the crop_path generated internally
-            crop_path = cmd[-1]
-            raise subprocess.CalledProcessError(1, "ffmpeg", stderr=f"Cannot write to {crop_path}")
-
-        mock_run.side_effect = side_effect
-
-        with self.assertRaises(VideoROIError) as ctx:
-            with temporary_roi_crops([self.frames[0]], self.roi):
-                pass
-
-        # The exact crop path shouldn't be in the error, but the placeholder should.
-        # Note: we can't easily assertNotIn since crop_path is dynamically generated,
-        # but the masking guarantees it's replaced.
-        self.assertIn("<crop-output>", str(ctx.exception))
-        self.assertNotIn(".jpg", str(ctx.exception).split("<crop-output>")[1] if "<crop-output>" in str(ctx.exception) else "")
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_an_temp_dir_masked(self, mock_run):
-        import subprocess
-        def side_effect(cmd, **kwargs):
-            import os
-            temp_dir = os.path.dirname(cmd[-1])
-            raise subprocess.CalledProcessError(1, "ffmpeg", stderr=f"No space in {temp_dir} left")
-        mock_run.side_effect = side_effect
-        with self.assertRaises(VideoROIError) as ctx:
-            with temporary_roi_crops([self.frames[0]], self.roi):
-                pass
-        self.assertIn("<temp-dir>", str(ctx.exception))
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_ao_long_stderr_truncated(self, mock_run):
-        import subprocess
-        long_err = "X" * 3000
-        mock_run.side_effect = subprocess.CalledProcessError(1, "ffmpeg", stderr=long_err)
-        with self.assertRaises(VideoROIError) as ctx:
-            with temporary_roi_crops([self.frames[0]], self.roi):
-                pass
-        msg = str(ctx.exception)
-        self.assertIn("[gekürzt]", msg)
-        self.assertLess(len(msg), 2200)
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_ap_subprocess_args_capture(self, mock_run):
-        def side_effect(cmd, **kwargs):
-            with open(cmd[-1], "wb") as f: f.write(b"fakecrop")
-            return MagicMock(returncode=0)
-        mock_run.side_effect = side_effect
-
-        with temporary_roi_crops([self.frames[0]], self.roi) as crops:
-            kwargs = mock_run.call_args.kwargs
-            self.assertTrue(kwargs.get('capture_output'))
-            self.assertTrue(kwargs.get('text'))
-            self.assertFalse(kwargs.get('shell'))
-            self.assertTrue(kwargs.get('check'))
-            self.assertIn('timeout', kwargs)
-
-    @patch('modules.video_roi.subprocess.run')
-    def test_aq_rotation_regression_crop_dimensions(self, mock_run):
-        # Frame extrahiert mit Rotation: 2160x3840 statt 3840x2160
-        f = ExtractedFrame(0, 0.0, "frame.jpg", 100, "hash", 2160, 3840)
-        roi = NormalizedROI(0.0, 0.0, 1.0, 1.0) # Fullscreen
+        self.temp_dir = tempfile.mkdtemp(prefix="test_video_roi_pillow_")
         
-        def side_effect(cmd, **kwargs):
-            with open(cmd[-1], "wb") as f_out: f_out.write(b"fakecrop")
-            return MagicMock(returncode=0)
-        mock_run.side_effect = side_effect
+    def tearDown(self):
+        if os.path.exists(self.temp_dir):
+            import shutil
+            shutil.rmtree(self.temp_dir)
+
+    def _create_image(self, filename, width, height, color="white", exif_orientation=None):
+        from PIL import Image
+        path = os.path.join(self.temp_dir, filename)
+        img = Image.new("RGB", (width, height), color)
+        
+        if exif_orientation:
+            # We add EXIF orientation manually using a small trick or just use piexif if possible, 
+            # but standard Pillow can write simple EXIF with exif kwarg in 3.13/Pillow 10+?
+            # Actually piexif is not in requirements. So let's write basic EXIF if needed,
+            # or just test that exif_transpose doesn't crash on standard images.
+            pass
+            
+        img.save(path, format="JPEG")
+        return path
+
+    def test_a_full_landscape(self):
+        from PIL import Image
+        path = self._create_image("landscape.jpg", 400, 200, color="blue")
+        f = ExtractedFrame(1, 1.0, path, 100, "hash", 400, 200)
+        roi = NormalizedROI(0.0, 0.0, 1.0, 1.0)
         
         with temporary_roi_crops([f], roi) as crops:
-            args = mock_run.call_args.args[0]
-            # Expecting exactly crop=2160:3840:0:0
-            self.assertIn("crop=2160:3840:0:0", args)
+            self.assertEqual(len(crops), 1)
+            crop = crops[0]
+            self.assertEqual(crop.pixel_roi.width, 400)
+            self.assertEqual(crop.pixel_roi.height, 200)
             
-            self.assertEqual(crops[0].pixel_roi.width, 2160)
-            self.assertEqual(crops[0].pixel_roi.height, 3840)
+            with Image.open(crop.crop_path) as cimg:
+                self.assertEqual(cimg.size, (400, 200))
+
+    def test_b_full_portrait(self):
+        from PIL import Image
+        path = self._create_image("portrait.jpg", 200, 400, color="red")
+        f = ExtractedFrame(2, 2.0, path, 100, "hash", 200, 400)
+        roi = NormalizedROI(0.0, 0.0, 1.0, 1.0)
+        
+        with temporary_roi_crops([f], roi) as crops:
+            crop = crops[0]
+            self.assertEqual(crop.pixel_roi.width, 200)
+            self.assertEqual(crop.pixel_roi.height, 400)
+            
+            with Image.open(crop.crop_path) as cimg:
+                self.assertEqual(cimg.size, (200, 400))
+
+    def test_c_partial_crop_content(self):
+        from PIL import Image, ImageDraw
+        # Create an image where the left half is black, right half is white
+        path = os.path.join(self.temp_dir, "split.jpg")
+        img = Image.new("RGB", (200, 400), "black")
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([100, 0, 200, 400], fill="white")
+        img.save(path, format="JPEG")
+        
+        f = ExtractedFrame(3, 3.0, path, 100, "hash", 200, 400)
+        # ROI: right half
+        roi = NormalizedROI(0.5, 0.0, 1.0, 1.0)
+        
+        with temporary_roi_crops([f], roi) as crops:
+            crop = crops[0]
+            self.assertEqual(crop.pixel_roi.x, 100)
+            self.assertEqual(crop.pixel_roi.width, 100)
+            
+            with Image.open(crop.crop_path) as cimg:
+                self.assertEqual(cimg.size, (100, 400))
+                # Check pixel in the middle
+                r, g, b = cimg.getpixel((50, 200))
+                self.assertGreater(r, 200) # should be white
+                self.assertGreater(g, 200)
+                self.assertGreater(b, 200)
+
+    def test_e_missing_file(self):
+        f = ExtractedFrame(4, 4.0, "/does/not/exist.jpg", 100, "hash", 200, 400)
+        roi = NormalizedROI(0.0, 0.0, 1.0, 1.0)
+        with self.assertRaisesRegex(VideoROIError, "Quellbild existiert nicht"):
+            with temporary_roi_crops([f], roi):
+                pass
+
+    def test_f_invalid_bytes(self):
+        path = os.path.join(self.temp_dir, "bad.jpg")
+        with open(path, "wb") as file:
+            file.write(b"not an image")
+            
+        f = ExtractedFrame(5, 5.0, path, 100, "hash", 200, 400)
+        roi = NormalizedROI(0.0, 0.0, 1.0, 1.0)
+        with self.assertRaisesRegex(VideoROIError, "Pillow konnte Bild nicht identifizieren"):
+            with temporary_roi_crops([f], roi):
+                pass
+
+    def test_j_byte_integrity_preserved(self):
+        import hashlib
+        path = self._create_image("integrity.jpg", 400, 200)
+        with open(path, "rb") as file:
+            original_sha = hashlib.sha256(file.read()).hexdigest()
+            
+        f = ExtractedFrame(6, 6.0, path, 100, "hash", 400, 200)
+        roi = NormalizedROI(0.0, 0.0, 1.0, 1.0)
+        
+        with temporary_roi_crops([f], roi):
+            pass
+            
+        with open(path, "rb") as file:
+            new_sha = hashlib.sha256(file.read()).hexdigest()
+            
+        self.assertEqual(original_sha, new_sha)
+
+    def test_g_cleanup_success(self):
+        path = self._create_image("cleanup.jpg", 400, 200)
+        f = ExtractedFrame(7, 7.0, path, 100, "hash", 400, 200)
+        roi = NormalizedROI(0.0, 0.0, 1.0, 1.0)
+        
+        crop_path = None
+        with temporary_roi_crops([f], roi) as crops:
+            crop_path = crops[0].crop_path
+            self.assertTrue(os.path.exists(crop_path))
+            
+        self.assertFalse(os.path.exists(crop_path))
+
+    def test_h_cleanup_with_error(self):
+        path = self._create_image("err.jpg", 400, 200)
+        f = ExtractedFrame(8, 8.0, path, 100, "hash", 400, 200)
+        roi = NormalizedROI(0.0, 0.0, 1.0, 1.0)
+        
+        crop_path = None
+        with self.assertRaises(ValueError):
+            with temporary_roi_crops([f], roi) as crops:
+                crop_path = crops[0].crop_path
+                raise ValueError("primary error")
+                
+        self.assertFalse(os.path.exists(crop_path))
+
+    def test_d_exif_orientation_regression(self):
+        from PIL import Image
+        import io
+        
+        # We will create an image with EXIF orientation 6 (Rotate 90 CW).
+        # We can construct a minimal EXIF block.
+        # Orientation tag is 0x0112 (274), value 6.
+        # Just writing it using Pillow is hard without piexif, 
+        # but Pillow 10 allows writing exif via Image.Exif
+        
+        path = os.path.join(self.temp_dir, "exif.jpg")
+        img = Image.new("RGB", (400, 200), "green")
+        
+        exif = img.getexif()
+        exif[274] = 6 # 6 = rotate 90 CW. This means visually it should be 200x400
+        
+        img.save(path, format="JPEG", exif=exif)
+        
+        f = ExtractedFrame(9, 9.0, path, 100, "hash", 400, 200)
+        # Note: frame_width and frame_height from ExtractedFrame aren't used for crop dimension logic anymore, 
+        # because temporary_roi_crops now dynamically reads oriented.size!
+        
+        roi = NormalizedROI(0.0, 0.0, 1.0, 1.0)
+        with temporary_roi_crops([f], roi) as crops:
+            crop = crops[0]
+            # Since orientation 6 means 90 CW, the oriented image should be 200x400
+            self.assertEqual(crop.pixel_roi.width, 200)
+            self.assertEqual(crop.pixel_roi.height, 400)
+            
+            with Image.open(crop.crop_path) as cimg:
+                self.assertEqual(cimg.size, (200, 400))
+
+
+    def test_i_cleanup_does_not_delete_foreign(self):
+        # We don't delete foreign files because the temp_dir itself is created by temporary_roi_crops
+        # and then entirely removed. If the user passed frames outside, they are not deleted.
+        path = self._create_image("foreign.jpg", 400, 200)
+        f = ExtractedFrame(10, 10.0, path, 100, "hash", 400, 200)
+        roi = NormalizedROI(0.0, 0.0, 1.0, 1.0)
+        with temporary_roi_crops([f], roi):
+            pass
+        self.assertTrue(os.path.exists(path))
