@@ -14,6 +14,24 @@ from modules.video_frames import ExtractedFrame
 class VideoROIError(Exception):
     pass
 
+MAX_PILLOW_ERROR_CHARS = 2000
+
+def _sanitize_pillow_error(error_text: str, source_frame_path: str, crop_path: str, temp_dir: str) -> str:
+    if not error_text:
+        return ""
+    text = error_text.strip()
+    if source_frame_path:
+        text = text.replace(source_frame_path, "<source-frame>")
+    if crop_path:
+        text = text.replace(crop_path, "<crop-output>")
+    if temp_dir:
+        text = text.replace(temp_dir, "<temp-dir>")
+
+    if len(text) > MAX_PILLOW_ERROR_CHARS:
+        text = text[:MAX_PILLOW_ERROR_CHARS] + "... [gekürzt]"
+
+    return text
+
 @dataclass(frozen=True)
 class NormalizedROI:
     left: float
@@ -127,7 +145,11 @@ def temporary_roi_crops(
             except UnidentifiedImageError:
                 raise VideoROIError("Pillow konnte Bild nicht identifizieren.")
             except OSError as e:
-                raise VideoROIError(f"Pillow Fehler beim Verarbeiten des Bildes: {str(e)}")
+                sanitized = _sanitize_pillow_error(str(e), frame.path, crop_path, temp_dir)
+                if sanitized:
+                    raise VideoROIError(f"Pillow Fehler beim Verarbeiten des Bildes: {sanitized}")
+                else:
+                    raise VideoROIError("Pillow Fehler beim Verarbeiten des Bildes.")
 
             if not os.path.exists(crop_path):
                 raise VideoROIError("Crop-Datei wurde von Pillow nicht erstellt.")
