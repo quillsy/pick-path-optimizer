@@ -95,6 +95,23 @@ class TestCalibrationPairing(unittest.TestCase):
             select_calibration_pairs([], self.crops[:1])
 
 
+
+    def test_e_f_pairing_sort_order(self):
+        # E. Timestamps reverse
+        f1 = ExtractedFrame(1, 10.0, "f1.jpg", 100, "h1")
+        f2 = ExtractedFrame(2, 5.0, "f2.jpg", 100, "h2")
+        c1 = ROICrop(1, 10.0, "f1.jpg", "c1.jpg", self.pixel_roi, 50, "ch1")
+        c2 = ROICrop(2, 5.0, "f2.jpg", "c2.jpg", self.pixel_roi, 50, "ch2")
+        pairs = select_calibration_pairs([f1, f2], [c1, c2])
+        self.assertEqual(pairs[0].sequence_index, 2)
+        self.assertEqual(pairs[1].sequence_index, 1)
+
+        # F. Same timestamp, sequence tie-breaker
+        f3 = ExtractedFrame(3, 5.0, "f3.jpg", 100, "h3")
+        c3 = ROICrop(3, 5.0, "f3.jpg", "c3.jpg", self.pixel_roi, 50, "ch3")
+        pairs2 = select_calibration_pairs([f3, f2], [c3, c2])
+        self.assertEqual(pairs2[0].sequence_index, 2)
+        self.assertEqual(pairs2[1].sequence_index, 3)
 class TestCalibrationZIP(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp(prefix="test_calib_zip_")
@@ -181,6 +198,46 @@ class TestCalibrationZIP(unittest.TestCase):
             self.assertNotIn(evil_name, zf.namelist())
 
 
+
+    def test_build_a_changed_file_hash(self):
+        with open(self.pairs[0].source_original_path, "wb") as f:
+            f.write(b"changed_data_here")
+        with self.assertRaisesRegex(CalibrationPackageError, "verändert"):
+            build_calibration_zip(self.pairs, self.meta, self.norm_roi, "test.mp4")
+
+    def test_build_b_c_empty_file(self):
+        with open(self.pairs[0].source_crop_path, "wb") as f:
+            f.write(b"")
+        with self.assertRaisesRegex(CalibrationPackageError, "leer"):
+            build_calibration_zip(self.pairs, self.meta, self.norm_roi, "test.mp4")
+
+    def test_build_d_missing_file(self):
+        import os
+        os.remove(self.pairs[0].source_original_path)
+        with self.assertRaisesRegex(CalibrationPackageError, "Lesen der Quelldateien"):
+            build_calibration_zip(self.pairs, self.meta, self.norm_roi, "test.mp4")
+
+    def test_build_g_different_pixel_roi(self):
+        p1 = self.pairs[0]
+        p2 = CalibrationFrame(
+            sequence_index=1, timestamp_seconds=1.0,
+            original_filename="original/frame_0001.jpg", crop_filename="crop/frame_0001.jpg",
+            original_size_bytes=p1.original_size_bytes, crop_size_bytes=p1.crop_size_bytes,
+            original_sha256=p1.original_sha256, crop_sha256=p1.crop_sha256,
+            pixel_roi=PixelROI(0, 0, 1, 1),
+            source_original_path=p1.source_original_path, source_crop_path=p1.source_crop_path
+        )
+        with self.assertRaisesRegex(CalibrationPackageError, "Unterschiedliche PixelROI"):
+            build_calibration_zip([p1, p2], self.meta, self.norm_roi, "test.mp4")
+
+    def test_build_h_empty_pairs(self):
+        with self.assertRaisesRegex(CalibrationPackageError, "Keine Kalibrierungsframes"):
+            build_calibration_zip([], self.meta, self.norm_roi, "test.mp4")
+
+    def test_build_i_invalid_max_bytes(self):
+        for bad in [0, -1, 3.14, True]:
+            with self.assertRaises(ValueError):
+                build_calibration_zip(self.pairs, self.meta, self.norm_roi, "test.mp4", max_bytes=bad)
 class TestVerificationFailures(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp(prefix="test_calib_zip_verify_")
@@ -295,3 +352,188 @@ class TestVerificationFailures(unittest.TestCase):
         # We limit to 50 bytes using the max_bytes argument to test it
         with self.assertRaises(CalibrationPackageError):
             build_calibration_zip([self.pair], self.meta, self.norm_roi, "test.mp4", max_bytes=50)
+
+    def test_verify_j_k_extra_file(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                zf_out.writestr(item, zf_in.read(item.filename))
+            zf_out.writestr("original/extra.jpg", b"hello")
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "Dateimenge im ZIP entspricht nicht"):
+            verify_calibration_zip(bad_zip)
+
+    def test_verify_l_duplicate_entry(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                zf_out.writestr(item, zf_in.read(item.filename))
+            zf_out.writestr("manifest.json", b"{}")
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "Doppelter ZIP-Eintrag"):
+            verify_calibration_zip(bad_zip)
+
+    def test_verify_m_no_frames(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                if item.filename == "manifest.json":
+                    m = json.loads(zf_in.read(item.filename).decode())
+                    del m["frames"]
+                    zf_out.writestr(item, json.dumps(m).encode())
+                else:
+                    zf_out.writestr(item, zf_in.read(item.filename))
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "frames ist keine Liste"):
+            verify_calibration_zip(bad_zip)
+
+    def test_verify_n_frames_not_array(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                if item.filename == "manifest.json":
+                    m = json.loads(zf_in.read(item.filename).decode())
+                    m["frames"] = {}
+                    zf_out.writestr(item, json.dumps(m).encode())
+                else:
+                    zf_out.writestr(item, zf_in.read(item.filename))
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "frames ist keine Liste"):
+            verify_calibration_zip(bad_zip)
+
+    def test_verify_o_frame_not_object(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                if item.filename == "manifest.json":
+                    m = json.loads(zf_in.read(item.filename).decode())
+                    m["frames"][0] = "string"
+                    zf_out.writestr(item, json.dumps(m).encode())
+                else:
+                    zf_out.writestr(item, zf_in.read(item.filename))
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "Frameeintrag ist kein Object"):
+            verify_calibration_zip(bad_zip)
+
+    def test_verify_p_duplicate_sequence(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                if item.filename == "manifest.json":
+                    m = json.loads(zf_in.read(item.filename).decode())
+                    m["frames"].append(m["frames"][0])
+                    zf_out.writestr(item, json.dumps(m).encode())
+                else:
+                    zf_out.writestr(item, zf_in.read(item.filename))
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "Doppelter sequence_index"):
+            verify_calibration_zip(bad_zip)
+
+    def test_verify_q_duplicate_original_file(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                if item.filename == "manifest.json":
+                    m = json.loads(zf_in.read(item.filename).decode())
+                    f2 = m["frames"][0].copy()
+                    f2["sequence_index"] = 99
+                    f2["timestamp_seconds"] = 99.0
+                    m["frames"].append(f2)
+                    zf_out.writestr(item, json.dumps(m).encode())
+                else:
+                    zf_out.writestr(item, zf_in.read(item.filename))
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "Doppelter original_file-Verweis"):
+            verify_calibration_zip(bad_zip)
+
+    def test_verify_r_invalid_sha(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                if item.filename == "manifest.json":
+                    m = json.loads(zf_in.read(item.filename).decode())
+                    m["frames"][0]["original_sha256"] = "short"
+                    zf_out.writestr(item, json.dumps(m).encode())
+                else:
+                    zf_out.writestr(item, zf_in.read(item.filename))
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "Ungültiges original_sha256"):
+            verify_calibration_zip(bad_zip)
+
+    def test_verify_s_size_zero(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                if item.filename == "manifest.json":
+                    m = json.loads(zf_in.read(item.filename).decode())
+                    m["frames"][0]["original_size_bytes"] = 0
+                    zf_out.writestr(item, json.dumps(m).encode())
+                else:
+                    zf_out.writestr(item, zf_in.read(item.filename))
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "Ungültige original_size_bytes"):
+            verify_calibration_zip(bad_zip)
+
+    def test_verify_t_bool_sequence(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                if item.filename == "manifest.json":
+                    m = json.loads(zf_in.read(item.filename).decode())
+                    m["frames"][0]["sequence_index"] = True
+                    zf_out.writestr(item, json.dumps(m).encode())
+                else:
+                    zf_out.writestr(item, zf_in.read(item.filename))
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "Ungültiger sequence_index"):
+            verify_calibration_zip(bad_zip)
+
+    def test_verify_u_timestamp_invalid(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                if item.filename == "manifest.json":
+                    m = json.loads(zf_in.read(item.filename).decode())
+                    m["frames"][0]["timestamp_seconds"] = "foo"
+                    zf_out.writestr(item, json.dumps(m).encode())
+                else:
+                    zf_out.writestr(item, zf_in.read(item.filename))
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "Ungültiger timestamp_seconds"):
+            verify_calibration_zip(bad_zip)
+
+    def test_verify_v_windows_path(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                zf_out.writestr(item, zf_in.read(item.filename))
+            zf_out.writestr("..\\evil.jpg", b"hello")
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "Gefährlicher Pfad"):
+            verify_calibration_zip(bad_zip)
+
+    def test_verify_w_dotdot_path(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                zf_out.writestr(item, zf_in.read(item.filename))
+            zf_out.writestr("original/../evil.jpg", b"hello")
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "Gefährlicher Pfad"):
+            verify_calibration_zip(bad_zip)
+
+    def test_verify_x_invalid_schema_name(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                if item.filename == "manifest.json":
+                    m = json.loads(zf_in.read(item.filename).decode())
+                    m["frames"][0]["original_file"] = "original/foo.jpg"
+                    zf_out.writestr(item, json.dumps(m).encode())
+                else:
+                    zf_out.writestr(item, zf_in.read(item.filename))
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "Ungültiger original_file"):
+            verify_calibration_zip(bad_zip)
+
+    def test_verify_y_ordering_not_ascending(self):
+        def modify(zf_in, zf_out):
+            for item in zf_in.infolist():
+                if item.filename == "manifest.json":
+                    m = json.loads(zf_in.read(item.filename).decode())
+                    f2 = m["frames"][0].copy()
+                    f2["sequence_index"] = 2
+                    f2["timestamp_seconds"] = -1.0 # not chronologically after 0
+                    m["frames"].append(f2)
+                    zf_out.writestr(item, json.dumps(m).encode())
+                else:
+                    zf_out.writestr(item, zf_in.read(item.filename))
+        bad_zip = self._modify_zip(modify)
+        with self.assertRaisesRegex(CalibrationPackageError, "Frame-Reihenfolge nicht zeitlich aufsteigend|Ungültiger timestamp_seconds"): # if -1 it might fail earlier
+            verify_calibration_zip(bad_zip)

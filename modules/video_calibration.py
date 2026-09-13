@@ -28,7 +28,7 @@ class CalibrationFrame:
 
 
 def select_calibration_pairs(frames: List[ExtractedFrame], crops: List[ROICrop], max_pairs: int = 8) -> List[CalibrationFrame]:
-    if not isinstance(max_pairs, int) or isinstance(max_pairs, bool) or max_pairs <= 0:
+    if type(max_pairs) is not int or type(max_pairs) is bool or max_pairs <= 0:
         raise ValueError("max_pairs muss ein int > 0 sein")
 
     frame_dict = {}
@@ -50,7 +50,7 @@ def select_calibration_pairs(frames: List[ExtractedFrame], crops: List[ROICrop],
         raise ValueError("Unterschiedliche Anzahl von frames und crops oder eine Seite ist leer")
 
     pairs = []
-    for seq in sorted(frame_dict.keys()):
+    for seq in frame_dict.keys():
         if seq not in crop_dict:
             raise ValueError(f"Crop fehlt für frame {seq}")
         f = frame_dict[seq]
@@ -70,6 +70,8 @@ def select_calibration_pairs(frames: List[ExtractedFrame], crops: List[ROICrop],
             source_original_path=f.path,
             source_crop_path=c.crop_path
         ))
+
+    pairs.sort(key=lambda p: (p.timestamp_seconds, p.sequence_index))
 
     if len(pairs) <= max_pairs:
         return pairs
@@ -91,7 +93,6 @@ def select_calibration_pairs(frames: List[ExtractedFrame], crops: List[ROICrop],
     selected.append(pairs[-1])
     return selected
 
-
 MAX_CALIBRATION_ZIP_BYTES = 50 * 1024 * 1024
 
 def build_calibration_zip(
@@ -101,17 +102,46 @@ def build_calibration_zip(
     original_video_name: str,
     max_bytes: int = MAX_CALIBRATION_ZIP_BYTES
 ) -> bytes:
+    if type(max_bytes) is not int or type(max_bytes) is bool or max_bytes <= 0:
+        raise ValueError("max_bytes muss ein int > 0 sein")
+
+    if not selected_pairs:
+        raise CalibrationPackageError("Keine Kalibrierungsframes vorhanden.")
+
+    ref_roi = selected_pairs[0].pixel_roi
+    for pair in selected_pairs:
+        if pair.pixel_roi != ref_roi:
+            raise CalibrationPackageError("Unterschiedliche PixelROI innerhalb selected_pairs")
+
     out_buf = io.BytesIO()
 
     with zipfile.ZipFile(out_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         manifest_frames = []
         for pair in selected_pairs:
-            with open(pair.source_original_path, "rb") as f:
-                orig_bytes = f.read()
-            zf.writestr(pair.original_filename, orig_bytes)
+            try:
+                with open(pair.source_original_path, "rb") as f:
+                    orig_bytes = f.read()
+                with open(pair.source_crop_path, "rb") as f:
+                    crop_bytes = f.read()
+            except OSError:
+                raise CalibrationPackageError("Fehler beim Lesen der Quelldateien.")
 
-            with open(pair.source_crop_path, "rb") as f:
-                crop_bytes = f.read()
+            actual_orig_size = len(orig_bytes)
+            actual_crop_size = len(crop_bytes)
+
+            if actual_orig_size == 0 or actual_crop_size == 0:
+                raise CalibrationPackageError("Quelldatei ist leer.")
+
+            actual_orig_sha = hashlib.sha256(orig_bytes).hexdigest()
+            actual_crop_sha = hashlib.sha256(crop_bytes).hexdigest()
+
+            if (actual_orig_size != pair.original_size_bytes or
+                actual_crop_size != pair.crop_size_bytes or
+                actual_orig_sha != pair.original_sha256 or
+                actual_crop_sha != pair.crop_sha256):
+                raise CalibrationPackageError("Quelldatei hat sich seit der Frame-Erzeugung verändert.")
+
+            zf.writestr(pair.original_filename, orig_bytes)
             zf.writestr(pair.crop_filename, crop_bytes)
 
             manifest_frames.append({
@@ -119,10 +149,10 @@ def build_calibration_zip(
                 "timestamp_seconds": pair.timestamp_seconds,
                 "original_file": pair.original_filename,
                 "crop_file": pair.crop_filename,
-                "original_size_bytes": pair.original_size_bytes,
-                "crop_size_bytes": pair.crop_size_bytes,
-                "original_sha256": pair.original_sha256,
-                "crop_sha256": pair.crop_sha256
+                "original_size_bytes": actual_orig_size,
+                "crop_size_bytes": actual_crop_size,
+                "original_sha256": actual_orig_sha,
+                "crop_sha256": actual_crop_sha
             })
 
             if out_buf.tell() > max_bytes:
@@ -149,10 +179,10 @@ def build_calibration_zip(
                     "bottom": normalized_roi.bottom
                 },
                 "pixel": {
-                    "x": selected_pairs[0].pixel_roi.x if selected_pairs else 0,
-                    "y": selected_pairs[0].pixel_roi.y if selected_pairs else 0,
-                    "width": selected_pairs[0].pixel_roi.width if selected_pairs else 0,
-                    "height": selected_pairs[0].pixel_roi.height if selected_pairs else 0
+                    "x": ref_roi.x,
+                    "y": ref_roi.y,
+                    "width": ref_roi.width,
+                    "height": ref_roi.height
                 }
             },
             "frames": manifest_frames
@@ -163,13 +193,26 @@ def build_calibration_zip(
     if len(final_bytes) > max_bytes:
         raise CalibrationPackageError("ZIP überschreitet Maximalgröße")
 
+    verify_calibration_zip(final_bytes)
     return final_bytes
 
+import re
+import math
+
+import re
+import math
 
 def verify_calibration_zip(zip_bytes: bytes) -> None:
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
             namelist = zf.namelist()
+            if len(namelist) != len(set(namelist)):
+                raise CalibrationPackageError("Doppelter ZIP-Eintrag")
+
+            for name in namelist:
+                if ".." in name or name.startswith("/") or "\\" in name:
+                    raise CalibrationPackageError("Gefährlicher Pfad im ZIP")
+
             if "manifest.json" not in namelist:
                 raise CalibrationPackageError("manifest.json fehlt im ZIP")
 
@@ -179,13 +222,7 @@ def verify_calibration_zip(zip_bytes: bytes) -> None:
             except Exception:
                 raise CalibrationPackageError("manifest.json ist kein gültiges JSON")
 
-            for name in namelist:
-                if name != "manifest.json" and not name.startswith("original/") and not name.startswith("crop/"):
-                    raise CalibrationPackageError(f"Unerwartete Datei im ZIP: {name}")
-                if ".." in name or name.startswith("/"):
-                    raise CalibrationPackageError(f"Gefährlicher Pfad im ZIP: {name}")
-
-            if not isinstance(manifest, dict):
+            if type(manifest) is not dict:
                 raise CalibrationPackageError("Manifest ist kein JSON Object")
 
             if manifest.get("schema_version") != 1:
@@ -194,14 +231,75 @@ def verify_calibration_zip(zip_bytes: bytes) -> None:
             if manifest.get("purpose") != "pick_video_calibration":
                 raise CalibrationPackageError("Falscher purpose im Manifest")
 
-            for mf in manifest.get("frames", []):
+            if type(manifest.get("video")) is not dict or type(manifest.get("roi")) is not dict:
+                raise CalibrationPackageError("Manifest video oder roi ist kein dict")
+
+            frames = manifest.get("frames")
+            if type(frames) is not list:
+                raise CalibrationPackageError("frames ist keine Liste")
+
+            expected_names = {"manifest.json"}
+            seen_seqs = set()
+            seen_originals = set()
+            seen_crops = set()
+
+            last_ts = -1.0
+            last_seq = -1
+
+            for mf in frames:
+                if type(mf) is not dict:
+                    raise CalibrationPackageError("Frameeintrag ist kein Object")
+
+                seq = mf.get("sequence_index")
+                if type(seq) is not int or type(seq) is bool or seq < 0:
+                    raise CalibrationPackageError("Ungültiger sequence_index")
+                if seq in seen_seqs:
+                    raise CalibrationPackageError("Doppelter sequence_index im Manifest")
+                seen_seqs.add(seq)
+
+                ts = mf.get("timestamp_seconds")
+                if type(ts) not in (int, float) or type(ts) is bool or not math.isfinite(ts) or ts < 0:
+                    raise CalibrationPackageError("Ungültiger timestamp_seconds")
+
+                if ts < last_ts or (ts == last_ts and seq <= last_seq):
+                    raise CalibrationPackageError("Frame-Reihenfolge nicht zeitlich aufsteigend")
+                last_ts = ts
+                last_seq = seq
+
+                orig_file = mf.get("original_file")
+                crop_file = mf.get("crop_file")
+
+                if type(orig_file) is not str or not re.fullmatch(r"original/frame_\d{4}\.jpg", orig_file):
+                    raise CalibrationPackageError("Ungültiger original_file Pfad")
+                if type(crop_file) is not str or not re.fullmatch(r"crop/frame_\d{4}\.jpg", crop_file):
+                    raise CalibrationPackageError("Ungültiger crop_file Pfad")
+
+                if orig_file in seen_originals:
+                    raise CalibrationPackageError("Doppelter original_file-Verweis")
+                seen_originals.add(orig_file)
+                if crop_file in seen_crops:
+                    raise CalibrationPackageError("Doppelter crop_file-Verweis")
+                seen_crops.add(crop_file)
+
+                expected_names.add(orig_file)
+                expected_names.add(crop_file)
+
+                for size_key in ("original_size_bytes", "crop_size_bytes"):
+                    sz = mf.get(size_key)
+                    if type(sz) is not int or type(sz) is bool or sz <= 0:
+                        raise CalibrationPackageError(f"Ungültige {size_key}")
+
+                for hash_key in ("original_sha256", "crop_sha256"):
+                    h = mf.get(hash_key)
+                    if type(h) is not str or not re.fullmatch(r"[a-f0-9]{64}", h):
+                        raise CalibrationPackageError(f"Ungültiges {hash_key}")
+
+            if set(namelist) != expected_names:
+                raise CalibrationPackageError("Dateimenge im ZIP entspricht nicht den Erwartungen des Manifests")
+
+            for mf in frames:
                 for f_key, size_key, hash_key in [("original_file", "original_size_bytes", "original_sha256"), ("crop_file", "crop_size_bytes", "crop_sha256")]:
                     fname = mf.get(f_key)
-                    if not fname:
-                        raise CalibrationPackageError(f"Fehlender Dateiname für {f_key}")
-                    if fname not in namelist:
-                        raise CalibrationPackageError(f"Referenzierte Datei {fname} fehlt im ZIP")
-
                     data = zf.read(fname)
                     if len(data) != mf.get(size_key):
                         raise CalibrationPackageError(f"Größe für {fname} stimmt nicht überein")
